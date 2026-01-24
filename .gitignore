@@ -1,0 +1,9 @@
+# mpv cache - temporary files that should not be tracked
+portable_config/cache/
+
+# mpv binaries and debug symbols (download fresh or build from source)
+*.pdb
+
+# Common mpv temporary files
+*.log
+watch_later/
