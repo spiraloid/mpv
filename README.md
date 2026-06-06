@@ -1,0 +1,90 @@
+# mpv portable config
+
+A portable Windows mpv configuration for reviewing and curating numbered frame sequences — attempt variants, folder hopping, selects copying, and frame-group reordering.
+
+Drop this folder next to `mpv.exe` for a self-contained setup.
+
+## Workflow
+
+Files are expected to follow a naming convention like:
+
+```
+frame_001.png
+frame_001_attempt_01.png
+frame_001_attempt_02.png
+frame_002.png
+```
+
+The playlist auto-filters to the same media type as the starting file (video / image / audio). **Variant mode** controls whether `_attempt_##` files are visible.
+
+## Shortcuts
+
+### Playback & Navigation
+
+| Key | Action |
+|-----|--------|
+| `SPACE` | Next image · toggle pause (video/audio) |
+| `UP` / `DOWN` | Previous / next playlist item |
+| `LEFT` / `RIGHT` | Frame back / frame forward (video) |
+| `Shift+LEFT` / `Shift+RIGHT` | Seek −5 s / +5 s |
+| `WHEEL_UP` / `WHEEL_DOWN` | Frame back/forward (video) · prev/next item (image/audio) |
+| `Alt+WHEEL_UP` / `Alt+WHEEL_DOWN` | Prev / next item of same media type only |
+| `PGUP` / `PGDWN` | Previous / next playlist item |
+
+### Fullscreen
+
+| Key | Action |
+|-----|--------|
+| `f` | Toggle fullscreen |
+| `ENTER` | Toggle fullscreen |
+| `Alt+Enter` | Toggle fullscreen |
+| `Middle mouse` | Toggle fullscreen |
+
+### Frame Workflow
+
+| Key | Action |
+|-----|--------|
+| `s` / `Alt+s` | Copy file to same folder, stripping `_attempt_##` suffix |
+| `\` | Toggle variant mode — show/hide `_attempt_##` files |
+| `Ctrl+RIGHT` | Shift current frame group forward (swap with next group) |
+| `Ctrl+LEFT` | Shift current frame group backward (swap with previous group) |
+| `DEL` | Move current file to Recycle Bin |
+| `F2` | Rename current file |
+
+### Capture & Clipboard
+
+| Key | Action |
+|-----|--------|
+| `Ctrl+s` | Save numbered PNG snapshot (`basename_001.png`, auto-increments) |
+| `Ctrl+c` | Copy current video frame to clipboard |
+
+### Folder & Selects
+
+| Key | Action |
+|-----|--------|
+| `Ctrl+n` | Jump to next sibling folder and load all its media |
+| `Ctrl+Enter` | Copy current file to `../selects/` |
+
+### Misc
+
+| Key | Action |
+|-----|--------|
+| `h` | Show / hide in-player help overlay |
+| `Ctrl+r` | Force playlist rebuild |
+| `ESC` | Quit |
+
+## Scripts
+
+| Script | Status | Purpose |
+|--------|--------|---------|
+| `copy_remove_attempt_suffix.lua` | Active | Core workflow: filtering, variant mode, navigation, rename, shift, snapshot, trash |
+| `browse_to_next_folder.lua` | Active | Jump to next sibling folder |
+| `send_to_selects.lua` | Active | Copy file to `../selects/` |
+| `autoload.lua` | Disabled | Upstream autoload (replaced by `autoload-files` in `mpv.conf`) |
+| `filename_display_navigation.lua` | Disabled | Superseded by `copy_remove_attempt_suffix.lua` |
+
+## Tools
+
+| File | Purpose |
+|------|---------|
+| `tools/copy_to_selects.ps1` | PowerShell helper called by `send_to_selects.lua` |
