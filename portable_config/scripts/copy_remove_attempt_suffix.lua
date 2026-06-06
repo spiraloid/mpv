@@ -852,7 +852,8 @@ function copy_remove_attempt_suffix()
     -- Check for "_attempt_##" pattern (where ## is one or more digits)
     local base_name, attempt_num = name_without_ext:match("^(.+)_attempt_(%d+)$")
     if not base_name or not attempt_num then
-        mp.osd_message("File does not have '_attempt_##' suffix pattern")
+        -- No attempt suffix — fall back to saving a numbered snapshot
+        save_custom_snapshot()
         return
     end
     

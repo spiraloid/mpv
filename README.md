@@ -28,6 +28,21 @@ Then open a folder of frames by dragging it onto `mpv.exe`, or:
 & "$drive\mpv\mpv.exe" "C:\path\to\frames"
 ```
 
+### Set mpv as default (Open With)
+
+Do this once per file type for `.jpg`, `.jpeg`, `.png`, `.mp4`, `.mp3`, `.wav`:
+
+1. Right-click any file of that type in Explorer
+2. **Open with** → **Choose another app**
+3. Scroll down and click **More apps** if mpv isn't listed
+4. Click **Look for another app on this PC** and browse to `mpv.exe`
+5. Check **Always use this app to open `.ext` files** → **OK**
+
+> For Option B (portable), `mpv.exe` is at `$drive\mpv\mpv.exe`. For Option A (winget), find it with:
+> ```powershell
+> (Get-Command mpv).Source
+> ```
+
 ## Workflow
 
 Files are expected to follow a naming convention like:
