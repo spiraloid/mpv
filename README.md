@@ -2,7 +2,17 @@
 
 A portable Windows mpv configuration for reviewing and curating numbered frame sequences — attempt variants, folder hopping, selects copying, and frame-group reordering.
 
-Drop this folder next to `mpv.exe` for a self-contained setup.
+## Quickstart
+
+1. Download [mpv for Windows](https://mpv.io/installation/) and extract it somewhere (e.g. `C:\mpv\`).
+2. Clone this repo as `portable_config` next to `mpv.exe`:
+   ```powershell
+   git clone https://github.com/spiraloid/mpv.git "C:\mpv\portable_config"
+   ```
+3. Open a folder of frames by dragging it onto `mpv.exe`, or:
+   ```powershell
+   mpv.exe "C:\path\to\frames"
+   ```
 
 ## Workflow
 
