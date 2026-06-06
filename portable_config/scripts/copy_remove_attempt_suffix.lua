@@ -1035,83 +1035,44 @@ function rename_current_file()
 end
 
 function save_custom_snapshot()
-    msg.info("DEBUG: save_custom_snapshot function called")
     local current_path = mp.get_property("path")
     if not current_path then
         mp.osd_message("No file currently playing")
         return
     end
-    
-    msg.info("Taking snapshot for: " .. current_path)
-    
-    -- Extract directory and filename
+
     local dir, filename = current_path:match("(.+)[/\\]([^/\\]+)$")
     if not dir or not filename then
         mp.osd_message("Cannot parse file path")
         return
     end
-    
-    -- Extract name without extension
-    local name_without_ext, ext = filename:match("^(.+)%.([^%.]+)$")
-    if not name_without_ext then
-        name_without_ext = filename
-        ext = ""
-    end
-    
-    msg.info("Base filename: " .. name_without_ext)
-    
-    -- Remove any existing numbered suffix from the base name to get the true base
-    local true_base_name = name_without_ext:match("^(.+)_(%d+)$") or name_without_ext
-    
-    msg.info("True base name: " .. true_base_name)
-    
-    -- Scan directory for existing snapshot files with this base name
-    local scan_command = string.format('Get-ChildItem -Path "%s" -Filter "%s_*.png" | ForEach-Object { $_.Name }', dir, true_base_name)
-    msg.info("Scanning for existing snapshots: " .. scan_command)
-    
-    local result = utils.subprocess({
-        args = {"powershell", "-WindowStyle", "Hidden", "-Command", scan_command},
-        cancellable = false
-    })
-    
+
+    local name_without_ext = filename:match("^(.+)%.[^%.]+$") or filename
+
+    -- Strip trailing _NNN suffix to get the stable base name
+    local true_base_name = name_without_ext:match("^(.+)_%d+$") or name_without_ext
+
+    -- Escape Lua pattern magic chars so filenames like "my.video" match literally
+    local escaped_base = true_base_name:gsub("[%(%)%.%%%+%-%*%?%[%^%$]", "%%%1")
+
+    -- Walk the directory to find the highest existing snapshot index
     local highest_num = 0
-    
-    if result.status == 0 and result.stdout then
-        -- Parse the output to find the highest numbered suffix
-        for line in result.stdout:gmatch("[^\r\n]+") do
-            local num = line:match(true_base_name .. "_(%d+)%.png$")
-            if num then
-                local num_val = tonumber(num)
-                if num_val and num_val > highest_num then
-                    highest_num = num_val
-                end
-                msg.info("Found existing snapshot: " .. line .. " (number: " .. (num or "none") .. ")")
+    local dir_files = utils.readdir(dir, "files")
+    if dir_files then
+        for _, file in ipairs(dir_files) do
+            local n = tonumber(file:match("^" .. escaped_base .. "_(%d+)%.png$"))
+            if n and n > highest_num then
+                highest_num = n
             end
         end
     end
-    
-    -- Increment from the highest found number
-    local next_num = highest_num + 1
-    local snapshot_name = string.format("%s_%03d", true_base_name, next_num)
-    
-    msg.info("Highest existing number: " .. highest_num .. ", next number: " .. next_num)
-    
-    -- Create the snapshot filename with .png extension
-    local snapshot_filename = snapshot_name .. ".png"
+
+    local snapshot_filename = string.format("%s_%03d.png", true_base_name, highest_num + 1)
     local snapshot_path = dir .. "\\" .. snapshot_filename
-    
-    msg.info("Snapshot will be saved as: " .. snapshot_path)
-    
-    -- Use MPV's screenshot-to-file command
-    local result = mp.commandv("screenshot-to-file", snapshot_path, "video")
-    
-    if result then
-        mp.osd_message("Snapshot saved: " .. snapshot_filename, 2)
-        msg.info("Snapshot saved successfully: " .. snapshot_path)
-    else
-        mp.osd_message("Failed to save snapshot")
-        msg.error("Screenshot command failed")
-    end
+
+    mp.commandv("screenshot-to-file", snapshot_path, "video")
+    mp.osd_message("Snapshot saved: " .. snapshot_filename, 2)
+    msg.info("Snapshot saved: " .. snapshot_path)
 end
 
 function show_custom_help()
