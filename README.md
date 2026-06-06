@@ -6,27 +6,26 @@ A portable Windows mpv configuration for reviewing and curating numbered frame s
 
 **Option A — winget (installed)**
 
-1. Install mpv:
-   ```powershell
-   winget install mpv.mpv
-   ```
-2. Clone this repo and copy the config:
-   ```powershell
-   git clone https://github.com/spiraloid/mpv.git "$env:USERPROFILE\mpv-config"
-   Copy-Item "$env:USERPROFILE\mpv-config\portable_config\*" "$env:APPDATA\mpv\" -Recurse -Force
-   ```
+```powershell
+winget install -e --id shinchiro.mpv
+git clone https://github.com/spiraloid/mpv.git "$env:USERPROFILE\mpv-config"
+Copy-Item "$env:USERPROFILE\mpv-config\portable_config\*" "$env:APPDATA\mpv\" -Recurse -Force
+```
 
 **Option B — portable (extracted)**
 
-1. Download and extract mpv somewhere (e.g. `C:\mpv\`).
-2. Clone this repo as `portable_config` next to `mpv.exe`:
-   ```powershell
-   git clone https://github.com/spiraloid/mpv.git "C:\mpv\portable_config"
-   ```
+Set `$drive` to wherever you want mpv installed, then:
+
+```powershell
+$drive = "C:"
+Invoke-WebRequest "https://sourceforge.net/projects/mpv-player-windows/files/latest/download" -OutFile "$drive\mpv.zip"
+Expand-Archive "$drive\mpv.zip" -DestinationPath "$drive\mpv"
+git clone https://github.com/spiraloid/mpv.git "$drive\mpv\portable_config"
+```
 
 Then open a folder of frames by dragging it onto `mpv.exe`, or:
 ```powershell
-mpv "C:\path\to\frames"
+& "$drive\mpv\mpv.exe" "C:\path\to\frames"
 ```
 
 ## Workflow
