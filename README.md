@@ -12,6 +12,11 @@ git clone https://github.com/spiraloid/mpv.git "$env:USERPROFILE\mpv-config"
 Copy-Item "$env:USERPROFILE\mpv-config\portable_config\*" "$env:APPDATA\mpv\" -Recurse -Force
 ```
 
+To update later, run:
+```powershell
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\mpv-config\update.ps1"
+```
+
 **Option B — portable (extracted)**
 
 Set `$drive` to wherever you want mpv installed, then:
