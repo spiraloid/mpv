@@ -4,15 +4,30 @@ A portable Windows mpv configuration for reviewing and curating numbered frame s
 
 ## Quickstart
 
-1. Download [mpv for Windows](https://mpv.io/installation/) and extract it somewhere (e.g. `C:\mpv\`).
+**Option A — winget (installed)**
+
+1. Install mpv:
+   ```powershell
+   winget install mpv.mpv
+   ```
+2. Clone this repo and copy the config:
+   ```powershell
+   git clone https://github.com/spiraloid/mpv.git "$env:USERPROFILE\mpv-config"
+   Copy-Item "$env:USERPROFILE\mpv-config\portable_config\*" "$env:APPDATA\mpv\" -Recurse -Force
+   ```
+
+**Option B — portable (extracted)**
+
+1. Download and extract mpv somewhere (e.g. `C:\mpv\`).
 2. Clone this repo as `portable_config` next to `mpv.exe`:
    ```powershell
    git clone https://github.com/spiraloid/mpv.git "C:\mpv\portable_config"
    ```
-3. Open a folder of frames by dragging it onto `mpv.exe`, or:
-   ```powershell
-   mpv.exe "C:\path\to\frames"
-   ```
+
+Then open a folder of frames by dragging it onto `mpv.exe`, or:
+```powershell
+mpv "C:\path\to\frames"
+```
 
 ## Workflow
 
