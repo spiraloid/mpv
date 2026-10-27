@@ -34,10 +34,35 @@ local function try_copy_method(method_name, cmd_args)
     return res.status == 0, res
 end
 
+local is_windows = package.config:sub(1,1) == '\\'
+
+-- macOS/Linux: copy to <file's folder>/../selects/ with mkdir + cp
+local function send_to_selects_posix(path)
+    local source_abs = utils.join_path(mp.get_property("working-directory"), path)
+    local file_dir, filename = utils.split_path(source_abs)
+    local parent_dir = utils.split_path(file_dir:gsub("/+$", ""))
+    local selects_dir = utils.join_path(parent_dir, "selects")
+
+    local mk = utils.subprocess({args = {"mkdir", "-p", selects_dir}, cancellable = false})
+    local cp = utils.subprocess({args = {"cp", source_abs, selects_dir .. "/"}, cancellable = false})
+    if mk.status == 0 and cp.status == 0 then
+        mp.osd_message("✅ Copied to selects:\n" .. filename)
+        mp.command_native_async({name = "subprocess", playback_only = false,
+            args = {"afplay", "/System/Library/Sounds/Glass.aiff"}}, function() end)
+    else
+        mp.osd_message("❌ Copy failed\n→ " .. selects_dir)
+    end
+end
+
 mp.add_key_binding("Ctrl+Enter", "send-to-selects", function()
     local relpath = mp.get_property("path")
     if not relpath then
         mp.osd_message("No file loaded.")
+        return
+    end
+
+    if not is_windows then
+        send_to_selects_posix(relpath)
         return
     end
 

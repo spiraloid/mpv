@@ -5,12 +5,14 @@ local utils = require 'mp.utils'
 local msg = require 'mp.msg'
 
 function get_file_extensions()
-    -- Common video and audio file extensions
-    return {
-        "mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "3gp",
-        "mp3", "flac", "wav", "aac", "ogg", "wma", "m4a", "opus",
-        "jpg", "jpeg", "png", "gif", "bmp", "tiff", "webp"
-    }
+    -- mpv's own image/video/audio extension lists (extend them in mpv.conf)
+    local extensions = {}
+    for _, media_type in ipairs({"image", "video", "audio"}) do
+        for _, ext in ipairs(mp.get_property_native(media_type .. "-exts") or {}) do
+            table.insert(extensions, ext:lower())
+        end
+    end
+    return extensions
 end
 
 function is_media_file(filename)
@@ -27,42 +29,27 @@ function is_media_file(filename)
     return false
 end
 
+-- Case-insensitive name sort (matches PowerShell's Sort-Object Name)
+local function sort_names(names)
+    table.sort(names, function(a, b) return a:lower() < b:lower() end)
+    return names
+end
+
 function get_sorted_media_files(directory)
     local files = {}
-    
-    -- Use PowerShell to get directory contents on Windows
-    local command = string.format('powershell -c "Get-ChildItem -Path \'%s\' -File | Sort-Object Name | Select-Object -ExpandProperty Name"', directory)
-    local handle = io.popen(command)
-    
-    if handle then
-        for filename in handle:lines() do
-            filename = filename:gsub("\r", "") -- Remove carriage return
-            if is_media_file(filename) then
-                table.insert(files, filename)
-            end
+
+    -- utils.readdir is cross-platform (Windows and macOS)
+    for _, filename in ipairs(utils.readdir(directory, "files") or {}) do
+        if is_media_file(filename) then
+            table.insert(files, filename)
         end
-        handle:close()
     end
-    
-    return files
+
+    return sort_names(files)
 end
 
 function get_sorted_directories(parent_path)
-    local dirs = {}
-    
-    -- Use PowerShell to get subdirectories
-    local command = string.format('powershell -c "Get-ChildItem -Path \'%s\' -Directory | Sort-Object Name | Select-Object -ExpandProperty Name"', parent_path)
-    local handle = io.popen(command)
-    
-    if handle then
-        for dirname in handle:lines() do
-            dirname = dirname:gsub("\r", "") -- Remove carriage return
-            table.insert(dirs, dirname)
-        end
-        handle:close()
-    end
-    
-    return dirs
+    return sort_names(utils.readdir(parent_path, "dirs") or {})
 end
 
 function browse_to_next_folder()

@@ -1,0 +1,133 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    mpv.plist — extra Info.plist keys for the mpv app bundle.
+    Auto-loaded by appmaker.sh when the binary name matches the filename.
+
+    Contains:
+      - CFBundleDocumentTypes  : declares video/audio/image file associations
+      - UTImportedTypeDeclarations : teaches macOS about MKV and WebM
+      - LSApplicationCategoryType : marks the app as a video app
+-->
+<plist version="1.0">
+<dict>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.video</string>
+
+    <!--
+        CFBundleDocumentTypes — file types this app can open.
+        LSHandlerRank options:
+          Owner     : app created this format (exclusive claim)
+          Default   : preferred handler, wins tie-breaks
+          Alternate : can open it, but yields to others
+    -->
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Video File</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Default</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.movie</string>
+                <string>public.mpeg-4</string>
+                <string>com.apple.quicktime-movie</string>
+                <string>public.avi</string>
+                <string>public.mpeg</string>
+                <string>public.mpeg-2-video</string>
+                <string>public.mpeg-2-transport-stream</string>
+                <string>public.3gpp</string>
+                <string>public.3gpp2</string>
+                <string>com.microsoft.windows-media-wmv</string>
+                <string>com.microsoft.windows-media-wmp</string>
+                <string>org.matroska.mkv</string>
+                <string>org.webmproject.webm</string>
+                <string>com.adobe.flash.video</string>
+            </array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Audio File</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Default</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.audio</string>
+                <string>public.mp3</string>
+                <string>com.microsoft.waveform-audio</string>
+                <string>public.aiff-audio</string>
+                <string>public.aifc-audio</string>
+                <string>com.apple.m4a-audio</string>
+                <string>public.ogg-vorbis</string>
+                <string>org.xiph.flac</string>
+            </array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Image File</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Default</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.image</string>
+                <string>public.jpeg</string>
+                <string>public.png</string>
+                <string>public.tiff</string>
+                <string>com.compuserve.gif</string>
+                <string>com.microsoft.bmp</string>
+                <string>org.webmproject.webp</string>
+                <string>public.heic</string>
+                <string>public.avif</string>
+                <string>com.truevision.tga-image</string>
+                <string>com.adobe.photoshop-image</string>
+            </array>
+        </dict>
+    </array>
+
+    <!--
+        UTImportedTypeDeclarations — teach macOS about formats it has no
+        built-in UTI for. Without these, .mkv and .webm files won't appear
+        in the "Open With" menu and can't be assigned to mpv by default.
+    -->
+    <key>UTImportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>org.matroska.mkv</string>
+            <key>UTTypeDescription</key>
+            <string>Matroska Video</string>
+            <key>UTTypeConformsTo</key>
+            <array><string>public.movie</string></array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array><string>mkv</string><string>mk3d</string></array>
+                <key>public.mime-type</key>
+                <array><string>video/x-matroska</string></array>
+            </dict>
+        </dict>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>org.webmproject.webm</string>
+            <key>UTTypeDescription</key>
+            <string>WebM Video</string>
+            <key>UTTypeConformsTo</key>
+            <array><string>public.movie</string></array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array><string>webm</string></array>
+                <key>public.mime-type</key>
+                <array><string>video/webm</string></array>
+            </dict>
+        </dict>
+    </array>
+</dict>
+</plist>
