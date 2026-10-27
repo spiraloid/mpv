@@ -646,30 +646,50 @@ mp.add_key_binding("ENTER",      "toggle_fullscreen_enter",    function() mp.com
 mp.add_key_binding("UP",         "navigate_prev",              function() navigate_playlist("prev") end)
 mp.add_key_binding("DOWN",       "navigate_next",              function() navigate_playlist("next") end)
 
-mp.add_key_binding("WHEEL_UP", "wheel_prev", function()
-    if rebuilding_playlist then return end
+-- Smooth-scrolling mice and trackpads send a burst of wheel events per notch/swipe.
+-- Step once on the first event of a burst (like one arrow press) and ignore the rest
+-- until the wheel pauses for WHEEL_BURST_GAP seconds.
+local WHEEL_BURST_GAP = 0.15
+local last_wheel_time = 0
+local function new_wheel_gesture()
+    local now = mp.get_time()
+    local is_new = now - last_wheel_time > WHEEL_BURST_GAP
+    last_wheel_time = now
+    return is_new
+end
+
+local function wheel_step(direction)
+    if not new_wheel_gesture() or rebuilding_playlist then return end
     update_media_type()
     if current_media_type == "video" then
         if not mp.get_property_bool("pause") then mp.command("set pause yes") end
-        mp.command("frame-back-step")
+        mp.command(direction == "next" and "frame-step" or "frame-back-step")
     else
-        navigate_playlist("prev")
+        navigate_playlist(direction)
     end
-end)
+end
 
-mp.add_key_binding("WHEEL_DOWN", "wheel_next", function()
-    if rebuilding_playlist then return end
-    update_media_type()
-    if current_media_type == "video" then
-        if not mp.get_property_bool("pause") then mp.command("set pause yes") end
-        mp.command("frame-step")
-    else
-        navigate_playlist("next")
-    end
-end)
+-- macOS "natural scrolling" (on by default) reverses wheel events: scrolling down arrives
+-- as WHEEL_UP. Swap so scrolling down always moves forward, like the DOWN arrow.
+local function natural_scrolling()
+    if mp.get_property("platform") ~= "darwin" then return false end
+    local r = utils.subprocess({args = {"defaults", "read", "-g", "com.apple.swipescrolldirection"},
+        cancellable = false})
+    -- key absent means the default (natural scrolling on)
+    return r.status ~= 0 or not (r.stdout or ""):match("^0")
+end
+local wheel_up_dir, wheel_down_dir = "prev", "next"
+if natural_scrolling() then wheel_up_dir, wheel_down_dir = "next", "prev" end
 
-mp.add_key_binding("Alt+WHEEL_UP",   "alt_wheel_prev", function() navigate_media_type("prev") end)
-mp.add_key_binding("Alt+WHEEL_DOWN", "alt_wheel_next", function() navigate_media_type("next") end)
+mp.add_key_binding("WHEEL_UP",   "wheel_prev", function() wheel_step(wheel_up_dir) end)
+mp.add_key_binding("WHEEL_DOWN", "wheel_next", function() wheel_step(wheel_down_dir) end)
+
+mp.add_key_binding("Alt+WHEEL_UP",   "alt_wheel_prev", function()
+    if new_wheel_gesture() then navigate_media_type(wheel_up_dir) end
+end)
+mp.add_key_binding("Alt+WHEEL_DOWN", "alt_wheel_next", function()
+    if new_wheel_gesture() then navigate_media_type(wheel_down_dir) end
+end)
 
 mp.add_key_binding("SPACE", "smart_space", function()
     update_media_type()
