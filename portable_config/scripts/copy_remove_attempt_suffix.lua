@@ -646,20 +646,39 @@ mp.add_key_binding("ENTER",      "toggle_fullscreen_enter",    function() mp.com
 mp.add_key_binding("UP",         "navigate_prev",              function() navigate_playlist("prev") end)
 mp.add_key_binding("DOWN",       "navigate_next",              function() navigate_playlist("next") end)
 
--- Smooth-scrolling mice and trackpads send a burst of wheel events per notch/swipe.
--- Step once on the first event of a burst (like one arrow press) and ignore the rest
--- until the wheel pauses for WHEEL_BURST_GAP seconds.
-local WHEEL_BURST_GAP = 0.15
-local last_wheel_time = 0
-local function new_wheel_gesture()
+-- Wheel input arrives two ways on macOS:
+--  * a notched wheel (e.g. Logitech MX): one event per notch -> one step each, like an arrow
+--    press. Scale varies 0.1-1 with scroll acceleration; fast rolls send 1.0 every ~12ms.
+--  * a trackpad: a dense ~120Hz stream of small (< 0.5) events, then a slowing momentum
+--    tail -> step when it starts, then once per TRACKPAD_UNITS_PER_STEP of scroll until the
+--    wheel goes idle for TRACKPAD_IDLE seconds.
+local DENSE_EVENT_GAP = 0.02
+local NOTCH_MIN_SCALE = 0.5
+local TRACKPAD_IDLE = 0.3
+local TRACKPAD_UNITS_PER_STEP = 5
+local last_wheel_time, last_wheel_dir, wheel_units, trackpad = 0, nil, 0, false
+local function wheel_should_step(direction, scale)
+    scale = scale or 1
     local now = mp.get_time()
-    local is_new = now - last_wheel_time > WHEEL_BURST_GAP
+    local gap = now - last_wheel_time
     last_wheel_time = now
-    return is_new
+    if gap > TRACKPAD_IDLE or direction ~= last_wheel_dir then trackpad = false end
+    last_wheel_dir = direction
+    if not trackpad and gap < DENSE_EVENT_GAP and scale < NOTCH_MIN_SCALE then
+        trackpad, wheel_units = true, 0
+    end
+    msg.debug(string.format("wheel %s scale=%s trackpad=%s", direction, tostring(scale), tostring(trackpad)))
+    if not trackpad then return true end
+    wheel_units = wheel_units + scale
+    if wheel_units >= TRACKPAD_UNITS_PER_STEP then
+        wheel_units = wheel_units - TRACKPAD_UNITS_PER_STEP
+        return true
+    end
+    return false
 end
 
-local function wheel_step(direction)
-    if not new_wheel_gesture() or rebuilding_playlist then return end
+local function wheel_step(direction, scale)
+    if not wheel_should_step(direction, scale) or rebuilding_playlist then return end
     update_media_type()
     if current_media_type == "video" then
         if not mp.get_property_bool("pause") then mp.command("set pause yes") end
@@ -669,27 +688,25 @@ local function wheel_step(direction)
     end
 end
 
--- macOS "natural scrolling" (on by default) reverses wheel events: scrolling down arrives
--- as WHEEL_UP. Swap so scrolling down always moves forward, like the DOWN arrow.
-local function natural_scrolling()
-    if mp.get_property("platform") ~= "darwin" then return false end
-    local r = utils.subprocess({args = {"defaults", "read", "-g", "com.apple.swipescrolldirection"},
-        cancellable = false})
-    -- key absent means the default (natural scrolling on)
-    return r.status ~= 0 or not (r.stdout or ""):match("^0")
-end
+-- WHEEL_DOWN = forward. macOS already applies each device's scroll-direction setting
+-- (natural/standard, incl. Logi Options+) before mpv sees the event.
 local wheel_up_dir, wheel_down_dir = "prev", "next"
-if natural_scrolling() then wheel_up_dir, wheel_down_dir = "next", "prev" end
 
-mp.add_key_binding("WHEEL_UP",   "wheel_prev", function() wheel_step(wheel_up_dir) end)
-mp.add_key_binding("WHEEL_DOWN", "wheel_next", function() wheel_step(wheel_down_dir) end)
+-- complex + scalable: receive each event's fractional scroll amount (e.scale)
+local wheel_flags = {complex = true, scalable = true}
+mp.add_key_binding("WHEEL_UP",   "wheel_prev", function(e)
+    if e.event ~= "up" then wheel_step(wheel_up_dir, e.scale) end
+end, wheel_flags)
+mp.add_key_binding("WHEEL_DOWN", "wheel_next", function(e)
+    if e.event ~= "up" then wheel_step(wheel_down_dir, e.scale) end
+end, wheel_flags)
 
-mp.add_key_binding("Alt+WHEEL_UP",   "alt_wheel_prev", function()
-    if new_wheel_gesture() then navigate_media_type(wheel_up_dir) end
-end)
-mp.add_key_binding("Alt+WHEEL_DOWN", "alt_wheel_next", function()
-    if new_wheel_gesture() then navigate_media_type(wheel_down_dir) end
-end)
+mp.add_key_binding("Alt+WHEEL_UP",   "alt_wheel_prev", function(e)
+    if e.event ~= "up" and wheel_should_step(wheel_up_dir, e.scale) then navigate_media_type(wheel_up_dir) end
+end, wheel_flags)
+mp.add_key_binding("Alt+WHEEL_DOWN", "alt_wheel_next", function(e)
+    if e.event ~= "up" and wheel_should_step(wheel_down_dir, e.scale) then navigate_media_type(wheel_down_dir) end
+end, wheel_flags)
 
 mp.add_key_binding("SPACE", "smart_space", function()
     update_media_type()
