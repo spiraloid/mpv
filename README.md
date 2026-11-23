@@ -70,7 +70,7 @@ The playlist auto-filters to the same media type as the starting file (video / i
 | `SPACE` | Next image · toggle pause (video/audio) |
 | `UP` / `DOWN` | Previous / next playlist item |
 | `Shift+LEFT` / `Shift+RIGHT` | Seek −5 s / +5 s |
-| `WHEEL_UP` / `WHEEL_DOWN` | Frame back/forward (video) · prev/next item (image/audio) |
+| `WHEEL_UP` / `WHEEL_DOWN` | Frame back/forward (video) · prev/next item (image/audio) · prev/next shot (XML assembly) |
 | `Alt+WHEEL_UP` / `Alt+WHEEL_DOWN` | Prev / next item of same media type only |
 | `PGUP` / `PGDWN` | Previous / next playlist item |
 
@@ -79,6 +79,7 @@ The playlist auto-filters to the same media type as the starting file (video / i
 | Key | Action |
 |-----|--------|
 | `LEFT` / `RIGHT` | Previous / next shot, landing on its first frame. Frame step when the file has no known cuts |
+| `WHEEL_UP` / `WHEEL_DOWN` | Previous / next shot, one per notch (XML assembly) |
 | `a` | Approve the clip on screen. On a rejected clip, undo the reject |
 | `r` | Reject the clip on screen |
 | `o` | Show / hide the shot label and buttons (outside an XML assembly: mpv's progress bar) |
@@ -93,7 +94,7 @@ The playlist auto-filters to the same media type as the starting file (video / i
 | `f` | Toggle fullscreen |
 | `ENTER` | Toggle fullscreen |
 | `Alt+Enter` | Toggle fullscreen |
-| `Middle mouse` | Toggle fullscreen |
+| `Middle mouse` | Fullscreen → a window a quarter of the screen (half width × half height) in the top-left corner · click again → fullscreen |
 
 ### Frame Workflow
 
@@ -146,7 +147,7 @@ Drag an FCP7 `.xml` onto mpv (or open it like any file):
 - **Picture:** the first video track plays as one continuous edit of its source clips, one chapter per clip.
 - **Sound:** the first audio track plays as the soundtrack.
 - **Paths:** `pathurl`s can be relative to the XML's folder or `file://` URLs.
-- **Missing sources:** a source that's missing is left out, and the OSD counts it on load.
+- **Missing sources:** a source that's missing keeps its slot as a dark gray **MISSING** clip, and the OSD counts it on load. Nothing after it shifts.
 - **Short sources:** a source shorter than its slot holds its slot, so the soundtrack stays in sync.
 
 **Shot labels.** Each clip's `<comments><mastercomment1>` is drawn bottom-right of the picture, scaled with it:
@@ -173,7 +174,9 @@ Pause on a clip and round buttons appear top-right of the picture. They hide aga
 - Marks its clipitem `<enabled>FALSE</enabled>` in the XML and points the clipitem's `pathurl` at the new location.
 - Saves the XML's first version as `<name>.xml.bak`.
 
-The slot stays in the edit as a dark gray clip with a large **REJECTED** across it, so everything after it keeps its timing, and `LEFT`/`RIGHT` skip it. The REJECTED card stays even with `o` off, since it stands in for the picture.
+The slot stays in the edit as a dark gray clip with a large **REJECTED** across it, so everything after it keeps its timing. `LEFT`/`RIGHT` still stop on it, so you can see it and undo it. The REJECTED card stays even with `o` off, since it stands in for the picture.
+
+In the review layout, the folder decides what's rejected, not the XML that happens to be open. Any XML that uses a candidate now under `retired/` (another copy of the same edit, or an older one) plays it as REJECTED at full length, and undo works from there too. Undo in one copy also clears the reject in the others. A copy's file may still read `<enabled>FALSE</enabled>`, but once the clip is back in place it plays normally.
 
 **Undo** (the rotate-ccw button, or `a` on a rejected clip) puts everything back as if the reject never happened:
 - The clip moves back to its old folder, which is recreated if it was removed.

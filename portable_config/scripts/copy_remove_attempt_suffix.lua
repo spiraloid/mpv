@@ -594,14 +594,14 @@ DEL            - Move current file to trash
 F2             - Rename current file
 h              - Show/hide this help
 Enter          - Toggle fullscreen
-Middle click   - Toggle fullscreen
+Middle click   - Fullscreen <-> quarter-screen window
 Space          - Images: next image  |  Video/Audio: pause/play
 Left/Right     - Prev/next shot (frame step when no cuts known)
 a / r          - Approve (undo if rejected) / reject clip (XML assembly)
 o              - Show/hide shot label + buttons (XML assembly)
 Up/Down        - Navigate playlist
 ctrl+Left/Right- Shift media group backward/forward
-Wheel          - Videos: pause + frame step  |  Images/Audio: navigate
+Wheel          - Videos: pause + frame step  |  Images/Audio: navigate  |  XML: shots
 Alt+Wheel      - Navigate same media type only
 
 Playlist holds only the starting file's media type (image/video/audio).
@@ -650,7 +650,18 @@ mp.add_key_binding("ctrl+r",     "manual_rebuild_playlist",    function()
 end)
 mp.add_key_binding("ctrl+RIGHT", "shift_media_forward",        shift_media_forward)
 mp.add_key_binding("ctrl+LEFT",  "shift_media_backward",       shift_media_backward)
-mp.add_key_binding("MBTN_MID",   "toggle_fullscreen_mouse",    function() mp.command("cycle fullscreen") end)
+-- Middle click: fullscreen -> a window a quarter of the screen (half width, half
+-- height) in the top-left corner; windowed -> fullscreen again
+mp.add_key_binding("MBTN_MID",   "toggle_fullscreen_mouse",    function()
+    if mp.get_property_bool("fullscreen") then
+        -- set before leaving fullscreen: set after, macOS puts the window back where
+        -- the pre-fullscreen frame was and only the size sticks
+        mp.set_property("geometry", "50%x50%+0+0")
+        mp.set_property_bool("fullscreen", false)
+    else
+        mp.set_property_bool("fullscreen", true)
+    end
+end)
 mp.add_key_binding("ENTER",      "toggle_fullscreen_enter",    function() mp.command("cycle fullscreen") end)
 mp.add_key_binding("UP",         "navigate_prev",              function() navigate_playlist("prev") end)
 mp.add_key_binding("DOWN",       "navigate_next",              function() navigate_playlist("next") end)
@@ -688,6 +699,11 @@ end
 
 local function wheel_step(direction, scale)
     if not wheel_should_step(direction, scale) or rebuilding_playlist then return end
+    -- XML assembly: one notch is one shot, same as LEFT / RIGHT (shot_jump.lua)
+    if is_xml_assembly(mp.get_property("path")) then
+        mp.commandv("script-binding", direction == "next" and "shot_jump/shot_next" or "shot_jump/shot_prev")
+        return
+    end
     update_media_type()
     if current_media_type == "video" then
         if not mp.get_property_bool("pause") then mp.command("set pause yes") end

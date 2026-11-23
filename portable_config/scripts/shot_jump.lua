@@ -335,28 +335,68 @@ local function candidate_info(path)
     }
 end
 
+-- Where a clip's file really is, and whether it is rejected. In the review layout
+-- the folder is the truth, not the XML that happens to be open: a candidate found
+-- under I_candidates/retired/ is rejected (even if this copy of the XML was never
+-- rewritten), and one found back in place is not. Returns nil if it is nowhere.
+local function resolve_source(c)
+    local p = c.path
+    if not p then return nil, not c.enabled end
+    local ci = candidate_info(p)
+    if ci then
+        local norm = p:gsub("\\", "/")
+        local live = ci.retired and native_seps((norm:gsub("/I_candidates/retired/", "/I_candidates/", 1))) or p
+        local gone = ci.retired and p or ci.retired_path
+        if exists(live) then return live, false end
+        if exists(gone) then return gone, true end
+        return nil, not c.enabled
+    end
+    if exists(p) then return p, not c.enabled end
+    return nil, not c.enabled
+end
+
 local function build_assembly(xml_path, seq)
     local segs, shots, blank = {}, {}, {}
     local t, missing, retired = 0, 0, 0
     local review_layout = false
+
+    -- Resolve every clip first; a missing one still keeps its slot, played from
+    -- any clip that exists (the whole frame is painted over, the sound is muted
+    -- or replaced by the soundtrack), so nothing after it shifts.
+    local filler
+    for _, c in ipairs(seq.video) do
+        c.resolved, c.rejected = resolve_source(c)
+        filler = filler or c.resolved
+    end
+
     for i, c in ipairs(seq.video) do
         local len_f = (c.out and c["in"]) and (c.out - c["in"]) or
                       ((c["end"] and c.start and c.start >= 0) and (c["end"] - c.start) or 0)
         local len = len_f / c.fps
-        if len > 0 and c.path and exists(c.path) then
+        local src = c.resolved or filler
+        if len > 0 and src then
+            if c.resolved then c.path = c.resolved end
+            local is_missing = c.resolved == nil
             -- Start 0.1ms early: at an exact start, float rounding in mpv's timeline
             -- drops the segment's first frame (measured on a 23.976 assembly).
-            segs[#segs + 1] = q(c.path) .. ",start=" .. num((c["in"] or 0) / c.fps - SEGMENT_LEAD) ..
+            local start = is_missing and 0 or ((c["in"] or 0) / c.fps - SEGMENT_LEAD)
+            segs[#segs + 1] = q(src) .. ",start=" .. num(start) ..
                               ",length=" .. num(len) .. ",title=" .. q(c.name)
             local refs = 0
             for _, other in ipairs(seq.video) do if other.file_key == c.file_key then refs = refs + 1 end end
-            local ci = candidate_info(c.path)
-            shots[#shots + 1] = {t = t, len = len, idx = i, name = c.name, retired = not c.enabled,
+            local ci = not is_missing and candidate_info(c.path) or nil
+            local rejected = not is_missing and c.rejected
+            shots[#shots + 1] = {t = t, len = len, idx = i, name = c.name, retired = rejected,
+                                 missing = is_missing,
                                  label = c.label and xml_unescape(c.label), label_color = c.label_color,
                                  refs = refs, ci = ci, approved = ci and ci.final and exists(ci.final) or false}
             if ci then review_layout = true end
-            if not c.enabled then
-                retired = retired + 1
+            if rejected then retired = retired + 1 end
+            if is_missing then
+                missing = missing + 1
+                msg.warn("missing source for " .. c.name .. ": " .. tostring(c.path))
+            end
+            if rejected or is_missing then
                 blank[#blank + 1] = string.format("between(t,%.4f,%.4f)",
                     t - 0.25 / seq.fps, t + len - 0.5 / seq.fps)
             end
@@ -575,7 +615,7 @@ mp.add_hook("on_load", 50, function()
     asm.notice = action and action.notice
     mp.set_property("stream-open-filename", asm.edl)
     if #asm.blank > 0 then
-        -- a rejected slot plays as a dark gray "virtual clip"; render() adds REJECTED
+        -- a rejected or missing slot plays as a dark gray "virtual clip"; render() adds the card
         local expr = table.concat(asm.blank, "+")
         mp.set_property("file-local-options/vf",
             "lavfi=[drawbox=c=0x" .. REJECTED_GRAY .. ":t=fill:enable='" .. expr .. "']")
@@ -850,7 +890,8 @@ local function jump_to(i)
     end
 end
 
-local function usable(i) return state.shots[i] and not state.shots[i].retired end
+-- Every shot is a stop, rejected and missing ones included (so they can be seen and undone)
+local function usable(i) return state.shots[i] ~= nil end
 
 local function shot_next()
     local shots = state.shots
@@ -922,6 +963,7 @@ end
 local function shot_buttons(shot)
     local asm = state.assembly
     if not shot or not asm or asm.generated then return nil end
+    if shot.missing then return nil end                    -- nothing on disk to act on
     if asm.review_layout and not shot.ci then return nil end
     if not asm.review_layout and shot.refs ~= 1 then return nil end
     if shot.retired then
@@ -943,10 +985,10 @@ end
 
 -- The rejected slot's "virtual clip": the vf paints it dark gray, this adds the text.
 -- Part of the picture, so it stays when o hides the label and buttons.
-local function rejected_events(events, vx0, vy0, vw, vh, k)
+local function rejected_events(events, vx0, vy0, vw, vh, k, text)
     events[#events + 1] = string.format(
-        "{\\an5\\pos(%.1f,%.1f)\\bord0\\shad0\\b1\\q2\\1c&H000000&\\1a&H00&\\fs%.1f\\fsp%.1f}REJECTED",
-        vx0 + vw / 2, vy0 + vh / 2, B.rejected_fs * k, 4 * k)
+        "{\\an5\\pos(%.1f,%.1f)\\bord0\\shad0\\b1\\q2\\1c&H000000&\\1a&H00&\\fs%.1f\\fsp%.1f}%s",
+        vx0 + vw / 2, vy0 + vh / 2, B.rejected_fs * k, 4 * k, text)
 end
 
 local function label_events(events, shot, vx0, vy0, vw, vh, k)
@@ -1111,7 +1153,8 @@ local function render(force)
     local vw, vh = d.w - d.ml - d.mr, d.h - d.mt - d.mb
     local k = vh / 1080
     local events = {}
-    if shot.retired then rejected_events(events, vx0, vy0, vw, vh, k) end
+    if shot.retired then rejected_events(events, vx0, vy0, vw, vh, k, "REJECTED")
+    elseif shot.missing then rejected_events(events, vx0, vy0, vw, vh, k, "MISSING") end
     buttons = {}
     if overlay_on then
         label_events(events, shot, vx0, vy0, vw, vh, k)
