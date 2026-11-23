@@ -593,13 +593,13 @@ ctrl+r         - Manually rebuild playlist
 DEL            - Move current file to trash
 F2             - Rename current file
 h              - Show/hide this help
-Enter          - Toggle fullscreen
 Middle click   - Fullscreen <-> quarter-screen window
 Space          - Images: next image  |  Video/Audio: pause/play
 Left/Right     - Prev/next shot (frame step when no cuts known)
 a / r / u      - Approve / reject (rewind down the rungs) / un-retire (forward)
 o              - Show/hide shot label + buttons (XML assembly)
 Up/Down        - Navigate playlist  |  XML: still of the next newer/older version
+Enter          - Toggle fullscreen  |  XML still: put that version in the edit
 ctrl+Left/Right- Shift media group backward/forward
 Wheel          - Videos: pause + frame step  |  Images/Audio: navigate  |  XML: shots
 Alt+Wheel      - Navigate same media type only
@@ -662,7 +662,12 @@ mp.add_key_binding("MBTN_MID",   "toggle_fullscreen_mouse",    function()
         mp.set_property_bool("fullscreen", true)
     end
 end)
-mp.add_key_binding("ENTER",      "toggle_fullscreen_enter",    function() mp.command("cycle fullscreen") end)
+-- XML assembly: Enter on an Up / Down still puts that version in the edit
+-- (shot_jump.lua; it toggles fullscreen otherwise)
+mp.add_key_binding("ENTER",      "toggle_fullscreen_enter",    function()
+    if is_xml_assembly(mp.get_property("path")) then mp.commandv("script-binding", "shot_jump/version_apply"); return end
+    mp.command("cycle fullscreen")
+end)
 -- XML assembly: Up / Down show a still of the next newer / older version of the
 -- shot on screen (shot_jump.lua)
 mp.add_key_binding("UP",         "navigate_prev",              function()

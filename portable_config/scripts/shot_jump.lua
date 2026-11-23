@@ -881,6 +881,24 @@ local function do_restore(p)
     p.notice = "restored: " .. p.name
 end
 
+-- Enter on an Up / Down still: the clip's slot now plays that version. Only the
+-- XML changes (pathurl + label); nothing moves on disk.
+local function do_pick(p)
+    local text = read_file(p.xml)
+    if not text then osd("couldn't read the XML", 3); return end
+    local was_url = (p.pathurl or ""):lower():match("^file:") ~= nil
+    local label = rung_label(rung_info(p.path), p.num_text)
+    local new_text = rewrite_xml(text, p.file_key, path_to_pathurl(p.path, dir_of(p.xml), was_url), true, label)
+    if new_text == text then return end
+    local bak = p.xml .. ".bak"
+    if not exists(bak) then write_file(bak, text) end
+    if not write_file(p.xml, new_text) then osd("couldn't update the XML", 3); return end
+    if read_file(bak) == new_text then os.remove(bak) end
+    session.journal[#session.journal + 1] = {xml_edit = p.xml}
+    msg.info("picked " .. p.path)
+    p.notice = "in the edit: " .. label
+end
+
 -- ── validation: does the XML match the folders? ───────────────────────────────
 
 local function short_path(path, xml_dir)
@@ -1018,6 +1036,13 @@ local function do_regen(p)
     p.notice = string.format("XML regenerated: %d slot%s re-pointed to the latest version", changed, changed == 1 and "" or "s")
 end
 
+local function run_action(action)
+    if action.kind == "reject" then do_retire(action)
+    elseif action.kind == "regen" then do_regen(action)
+    elseif action.kind == "pick" then do_pick(action)
+    else do_restore(action) end
+end
+
 mp.add_hook("on_load", 50, function()
     local url = mp.get_property("stream-open-filename", "")
     if not is_xml(url) or url:find("://", 1, true) then return end
@@ -1032,9 +1057,7 @@ mp.add_hook("on_load", 50, function()
     local action = pending_action
     pending_action = nil
     if action and action.xml == xml_path then
-        if action.kind == "reject" then do_retire(action)
-        elseif action.kind == "regen" then do_regen(action)
-        else do_restore(action) end
+        run_action(action)
         if action.notice then export.dirty, export.xml = true, xml_path end
         text = read_file(xml_path) or text
         mp.set_property("file-local-options/start", tostring(action.pos))
@@ -1882,7 +1905,7 @@ end
 -- either end. It pauses and shows a still: a hidden mpv grabs that version's frame
 -- at the same point in the shot, label burned in, and it is drawn over the video.
 -- Nothing moves and the XML is untouched. Play, or leaving the frame, puts the
--- real assembly back.
+-- real assembly back; Enter puts the version on screen in the edit instead.
 
 local PREVIEW_ID = 7    -- overlay-add slot
 
@@ -2002,7 +2025,8 @@ local function version_step(dir)
     end
     local n = #preview.list
     preview.k = (preview.k - 1 + dir) % n + 1
-    osd(string.format("%d / %d%s", preview.k, n, preview.k == preview.home and "  (in the edit)" or ""), 1)
+    osd(string.format("%d / %d%s", preview.k, n,
+        preview.k == preview.home and "  (in the edit)" or "  ·  Enter puts it in the edit"), 1.5)
     if preview.k == preview.home then
         preview.gen = preview.gen + 1
         preview.pos = mp.get_property_number("time-pos")
@@ -2030,10 +2054,28 @@ mp.observe_property("osd-dimensions", "native", function() if preview.active the
 mp.register_event("end-file", function() if preview.active then preview_clear() end end)
 mp.register_event("shutdown", function() for _, f in pairs(preview.files) do os.remove(f) end end)
 
+-- Enter on a still: put that version in the edit (the XML's clip points at it).
+-- A change like any other: Save Yes keeps it, No puts the XML back.
+-- Anywhere else Enter keeps its usual job, fullscreen.
+local function version_apply()
+    if not preview.shown then mp.command("cycle fullscreen"); return end
+    local asm = state.assembly
+    local shot = asm and state.shots[preview.shot]
+    local f = preview.list[preview.k]
+    if not shot or not f then return end
+    local clip = asm.seq.video[shot.idx]
+    local pos = preview.pos or mp.get_property_number("time-pos") or shot.t
+    preview_clear()
+    pending_action = {kind = "pick", xml = asm.xml, path = f.path, file_key = clip.file_key,
+                      pathurl = clip.pathurl, num_text = shot.num_text, pos = pos}
+    osd("putting " .. rung_label(rung_info(f.path), shot.num_text) .. " in the edit…", 1)
+    mp.commandv("loadfile", state.path, "replace")
+end
+
 -- While a still is up, a / r / u would act on the real shot underneath
 local function unless_preview(fn)
     return function()
-        if preview.shown then osd("preview only: play, or Up/Down back to the edit, first", 2); return end
+        if preview.shown then osd("preview: Enter puts it in the edit; play goes back", 2); return end
         if preview.active then preview_clear() end
         fn()
     end
@@ -2043,6 +2085,7 @@ mp.add_key_binding(nil, "shot_next", shot_next, {repeatable = true})
 mp.add_key_binding(nil, "shot_prev", shot_prev, {repeatable = true})
 mp.add_key_binding(nil, "version_up", function() version_step(1) end, {repeatable = true})
 mp.add_key_binding(nil, "version_down", function() version_step(-1) end, {repeatable = true})
+mp.add_key_binding(nil, "version_apply", version_apply)
 mp.add_key_binding(nil, "retire", unless_preview(retire))
 mp.add_key_binding(nil, "approve", unless_preview(approve))
 mp.add_key_binding(nil, "undo", unless_preview(restore))
@@ -2413,7 +2456,7 @@ mp.register_event("shutdown", function()
     local action = pending_action
     pending_action = nil
     if action then
-        if action.kind == "reject" then do_retire(action) else do_restore(action) end
+        run_action(action)
         if action.notice then export.dirty, export.xml = true, action.xml end
     end
     -- Anything but Yes puts the disk back: No, or a quit that never showed the
