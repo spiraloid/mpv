@@ -597,7 +597,7 @@ Enter          - Toggle fullscreen
 Middle click   - Fullscreen <-> quarter-screen window
 Space          - Images: next image  |  Video/Audio: pause/play
 Left/Right     - Prev/next shot (frame step when no cuts known)
-a / r          - Approve (undo if rejected) / reject clip (XML assembly)
+a / r / u      - Approve / reject (rewind down the rungs) / un-retire (forward)
 o              - Show/hide shot label + buttons (XML assembly)
 Up/Down        - Navigate playlist
 ctrl+Left/Right- Shift media group backward/forward
