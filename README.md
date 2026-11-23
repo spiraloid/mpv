@@ -1,6 +1,6 @@
 # mpv portable config
 
-A portable Windows mpv configuration for reviewing and curating numbered frame sequences — attempt variants, folder hopping, selects copying, and frame-group reordering.
+A portable mpv configuration for Windows and macOS. It's built for reviewing and curating numbered frame sequences (attempt variants, folder hopping, selects copying, frame-group reordering) and for reviewing edits shot by shot. That covers jumping between shots, playing an FCP7 XML as an assembly, and approving or rejecting clips from the player.
 
 ## Quickstart
 
@@ -69,11 +69,22 @@ The playlist auto-filters to the same media type as the starting file (video / i
 |-----|--------|
 | `SPACE` | Next image · toggle pause (video/audio) |
 | `UP` / `DOWN` | Previous / next playlist item |
-| `LEFT` / `RIGHT` | Frame back / frame forward (video) |
 | `Shift+LEFT` / `Shift+RIGHT` | Seek −5 s / +5 s |
 | `WHEEL_UP` / `WHEEL_DOWN` | Frame back/forward (video) · prev/next item (image/audio) |
 | `Alt+WHEEL_UP` / `Alt+WHEEL_DOWN` | Prev / next item of same media type only |
 | `PGUP` / `PGDWN` | Previous / next playlist item |
+
+### Shot Review Keys
+
+| Key | Action |
+|-----|--------|
+| `LEFT` / `RIGHT` | Previous / next shot, landing on its first frame. Frame step when the file has no known cuts |
+| `a` | Approve the clip on screen. On a rejected clip, undo the reject |
+| `r` | Reject the clip on screen |
+| `o` | Show / hide the shot label and buttons (outside an XML assembly: mpv's progress bar) |
+| `,` / `.` | Frame back / forward (mpv defaults) |
+
+`a`, `r` and `o` work while an FCP7 XML is playing as an assembly (see [Shot review](#shot-review) below).
 
 ### Fullscreen
 
@@ -117,6 +128,79 @@ The playlist auto-filters to the same media type as the starting file (video / i
 | `Ctrl+r` | Force playlist rebuild |
 | `ESC` | Quit |
 
+## Shot review
+
+### Jumping between shots
+
+`LEFT` / `RIGHT` jump to the first frame of the previous / next shot. Holding them repeats, and they wrap from the last shot to the first. The shot starts come from the first of these that applies:
+
+1. **You opened an FCP7 `.xml` (xmeml).** It plays as an assembly (below), and each clip is a shot.
+2. **The video has an XML beside it with the same name** (`clip.mp4` + `clip.xml`). Each clipitem's `<start>` is a shot start. If the XML's sequence length doesn't match the video, it's ignored.
+3. **Neither.** A background scan looks for picture cuts as soon as the video loads, and the keys work while it runs. When it finds cuts, it writes `clip.xml` beside the video so the next open is instant. A clip with no cuts gets no XML, and the arrows keep stepping one frame.
+
+The scan is a second, hidden mpv running ffmpeg's `scdet` filter. Nothing extra needs installing. It finds hard cuts; dissolves and fades mostly slip past it.
+
+### Playing an XML as an assembly
+
+Drag an FCP7 `.xml` onto mpv (or open it like any file):
+- **Picture:** the first video track plays as one continuous edit of its source clips, one chapter per clip.
+- **Sound:** the first audio track plays as the soundtrack.
+- **Paths:** `pathurl`s can be relative to the XML's folder or `file://` URLs.
+- **Missing sources:** a source that's missing is left out, and the OSD counts it on load.
+- **Short sources:** a source shorter than its slot holds its slot, so the soundtrack stays in sync.
+
+**Shot labels.** Each clip's `<comments><mastercomment1>` is drawn bottom-right of the picture, scaled with it:
+- The first word (the shot number) is full size and the rest half size, e.g. `03 candidate 00`.
+- `<mastercomment2>orange</mastercomment2>` draws the label orange.
+- A label ending in `EDIT` (e.g. `22 EDIT`) draws gray.
+- A label ending in `MISSING PLATE` draws the number plus a large centred card over a red wash.
+- A clip with no `<comments>` gets no label.
+
+### Approve, reject, undo
+
+Pause on a clip and round buttons appear top-right of the picture. They hide again when playback resumes. Click them or use the keys:
+
+| On a clip | Left button (`a`) | Right button (`r`) |
+|-----------|-------------------|--------------------|
+| Not yet reviewed | thumbs-up: approve | thumbs-down: reject |
+| Approved | solid, filled thumb (done) | thumbs-down: reject |
+| Rejected | rotate-ccw: undo the reject | grayed out |
+
+**Approve** copies the clip to a finals folder (see the layout below). It refuses if that shot already has a final. The copy goes to a hidden `.NN.mp4.part` first and is renamed only when complete, so a half-copied file never shows up as a final.
+
+**Reject** does three things:
+- Moves the clip into a `retired/` folder.
+- Marks its clipitem `<enabled>FALSE</enabled>` in the XML and points the clipitem's `pathurl` at the new location.
+- Saves the XML's first version as `<name>.xml.bak`.
+
+The slot stays in the edit as a dark gray clip with a large **REJECTED** across it, so everything after it keeps its timing, and `LEFT`/`RIGHT` skip it. The REJECTED card stays even with `o` off, since it stands in for the picture.
+
+**Undo** (the rotate-ccw button, or `a` on a rejected clip) puts everything back as if the reject never happened:
+- The clip moves back to its old folder, which is recreated if it was removed.
+- The empty folders it left under `retired/` are removed.
+- The XML gets its `pathurl` back and loses the `<enabled>FALSE</enabled>` line.
+- The `.bak` is deleted if the XML now matches it again.
+
+The XML is updated the moment you approve, reject or undo; there's nothing to save. If you quit right after pressing a key, the action is finished before mpv closes. A clip that's already rejected can't be approved. A clip used more than once in the edit (e.g. an opening shot repeated at the end) can't be rejected.
+
+### Where approved and rejected clips go
+
+**Review layout.** When clips live under a `shots/I_candidates/` folder:
+- Only clips from `I_candidates` get buttons. Other clips (plates, the edit itself) don't.
+- Approve copies `.../I_candidates/<any path>/NN.mp4` to `shots/K_final/NN.mp4`, where `NN` is the number the file name starts with.
+- Reject moves the clip to `shots/I_candidates/retired/<same path>` and removes its folder if that leaves it empty. Clips with the same name from different folders never collide.
+
+```
+shots/
+  I_candidates/
+    v.000/11-22__1206/03.mp4      <- candidate
+    retired/v.000/11-22__1300/07.mp4   <- rejected (r)
+  K_final/
+    03.mp4                         <- approved (a)
+```
+
+**Any other XML.** There's no Approve. Reject moves the clip to `retired/<its path relative to the XML>` beside the XML. A clip outside the XML's folder goes to `retired/<file name>`.
+
 ## Scripts
 
 | Script | Status | Purpose |
@@ -124,6 +208,7 @@ The playlist auto-filters to the same media type as the starting file (video / i
 | `copy_remove_attempt_suffix.lua` | Active | Core workflow: filtering, variant mode, navigation, rename, shift, snapshot, trash |
 | `browse_to_next_folder.lua` | Active | Jump to next sibling folder |
 | `send_to_selects.lua` | Active | Copy file to `../selects/` |
+| `shot_jump.lua` | Active | Shot review: shot jumps on `LEFT`/`RIGHT`, cut scan, FCP7 XML assemblies with shot labels, approve / reject / undo buttons |
 | `autoload.lua` | Disabled | Upstream autoload (replaced by `autoload-files` in `mpv.conf`) |
 | `filename_display_navigation.lua` | Disabled | Superseded by `copy_remove_attempt_suffix.lua` |
 

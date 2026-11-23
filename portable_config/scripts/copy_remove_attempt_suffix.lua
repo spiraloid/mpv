@@ -107,9 +107,15 @@ function detect_file_type(filename)
     return nil
 end
 
+-- An FCP7 .xml opened directly plays as an assembly (shot_jump.lua)
+local function is_xml_assembly(path)
+    return path ~= nil and path:lower():match("%.xml$") ~= nil
+end
+
 function update_media_type()
     local current_path = mp.get_property("path")
     if current_path then
+        if is_xml_assembly(current_path) then current_media_type = "video"; return end
         current_media_type = detect_file_type(current_path:match("([^/\\]+)$"))
     end
 end
@@ -199,7 +205,7 @@ end
 function rebuild_playlist()
     if rebuilding_playlist then return end
     local current_path = mp.get_property("path")
-    if not current_path then return end
+    if not current_path or is_xml_assembly(current_path) then return end
     rebuilding_playlist = true
     local dir = current_path:match("(.+)[/\\][^/\\]+$")
     if not dir then rebuilding_playlist = false; return end
@@ -341,6 +347,7 @@ end
 function move_to_trash()
     local current_path = mp.get_property("path")
     if not current_path then mp.osd_message("No file currently playing"); return end
+    if is_xml_assembly(current_path) then mp.osd_message("XML assembly: r rejects the clip on screen", 2); return end
     local playlist_count = mp.get_property_number("playlist-count") or 0
     local current_pos = mp.get_property_number("playlist-pos") or 0
     local file_to_delete = current_path
@@ -589,7 +596,9 @@ h              - Show/hide this help
 Enter          - Toggle fullscreen
 Middle click   - Toggle fullscreen
 Space          - Images: next image  |  Video/Audio: pause/play
-Left/Right     - Frame advance
+Left/Right     - Prev/next shot (frame step when no cuts known)
+a / r          - Approve (undo if rejected) / reject clip (XML assembly)
+o              - Show/hide shot label + buttons (XML assembly)
 Up/Down        - Navigate playlist
 ctrl+Left/Right- Shift media group backward/forward
 Wheel          - Videos: pause + frame step  |  Images/Audio: navigate
@@ -720,6 +729,11 @@ local last_processed_file = nil
 mp.register_event("start-file", function()
     local current_path = mp.get_property("path")
     if not current_path or current_path == last_processed_file then return end
+    if is_xml_assembly(current_path) then
+        last_processed_file = current_path
+        current_media_type = "video"
+        return
+    end
     local dir = current_path:match("(.+)[/\\][^/\\]+$")
     local filename = current_path:match("([^/\\]+)$")
     update_media_type()
