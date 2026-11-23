@@ -193,7 +193,7 @@ Pause on a clip and round buttons appear top-right of the picture. They hide aga
 - Marks its clipitem `<enabled>FALSE</enabled>` in the XML and points the clipitem's `pathurl` at the new location.
 - Saves the XML's first version as `<name>.xml.bak`.
 
-The slot stays in the edit as a dark gray clip with a large **REJECTED** across it, so everything after it keeps its timing. `LEFT`/`RIGHT` still stop on it, so you can see it and undo it. The REJECTED card stays even with `o` off, since it stands in for the picture.
+The slot stays in the edit as a dark gray clip with a large **REJECTED** across it, so everything after it keeps its timing. If the shot has a cleaned plate (`shots/B_cleaned_plates/NN.<ext>`, same number as the clip), the plate plays under the gray at 33% so you can still see what the shot is. With no plate, the slot is solid gray. `LEFT`/`RIGHT` still stop on it, so you can see it and undo it. The REJECTED card stays even with `o` off, since it stands in for the picture.
 
 In the review layout, the folder decides what's rejected, not the XML that happens to be open. Any XML that uses a candidate now under `retired/` (another copy of the same edit, or an older one) plays it as REJECTED at full length, and undo works from there too. Undo in one copy also clears the reject in the others. A copy's file may still read `<enabled>FALSE</enabled>`, but once the clip is back in place it plays normally.
 
