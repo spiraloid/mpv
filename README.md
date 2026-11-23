@@ -87,7 +87,7 @@ The playlist auto-filters to the same media type as the starting file (video / i
 | Key | Action |
 |-----|--------|
 | `SPACE` | Next image · toggle pause (video/audio) |
-| `UP` / `DOWN` | Previous / next playlist item (XML assembly: swap in the next newer / older version of the shot) |
+| `UP` / `DOWN` | Previous / next playlist item (XML assembly: the shot's history, `UP` older, `DOWN` newer) |
 | `Shift+LEFT` / `Shift+RIGHT` | Seek −5 s / +5 s |
 | `WHEEL_UP` / `WHEEL_DOWN` | Frame back/forward (video) · prev/next item (image/audio) · prev/next shot (XML assembly) |
 | `Alt+WHEEL_UP` / `Alt+WHEEL_DOWN` | Prev / next item of same media type only |
@@ -102,7 +102,7 @@ The playlist auto-filters to the same media type as the starting file (video / i
 | `a` | Approve the clip on screen. On a REJECTED slot, un-retire |
 | `r` | Reject the clip on screen. In a rung layout the slot falls back to the next file down |
 | `u` | Un-retire: bring back the shot's next newer retired version |
-| `UP` / `DOWN` | Swap the next newer / older version of the shot on screen into its slot |
+| `UP` / `DOWN` | Step through the history of the shot on screen: `UP` older (to the cleaned plate), `DOWN` newer (to the final) |
 | `o` | Show / hide the shot label and buttons (outside an XML assembly: mpv's progress bar) |
 | `,` / `.` | Frame back / forward (mpv defaults) |
 
@@ -242,7 +242,9 @@ So you can reject your way down to see every version of a shot, every run and ev
 - **A file whose old place is taken is skipped.**
 - **Undo everything** and the folders, the XML and its `.bak` are exactly as they started.
 
-**Flip through a shot's versions: `UP` / `DOWN`.** On a shot in a rung layout, `UP` swaps the next newer version of that shot into its slot and `DOWN` the next older, on the same tape (rung, then file date), wrapping at either end. The player stays on the same frame, paused or playing, and a note shows which one you're on (`07 run 00 · 4 / 5`). The swap is real: the XML's clip points at that file and its label updates, so the take plays in the cut and approve, reject and un-retire act on it. No file moves. It counts as a change like a reject: quit and **Save changes?** Yes keeps it and renders the video, No puts the XML back. Step back to the version you started on and there is nothing to save, so quitting doesn't ask.
+**A shot's history: `UP` / `DOWN`.** `LEFT` / `RIGHT` move between shots; `UP` / `DOWN` move through every version of the shot you're on. `DOWN` all the way is the final, `UP` all the way is the cleaned plate, and the ends stop. In between, newest to oldest: candidates, driver candidates, run candidates, runs. Within a rung the order is file date, the same tape reject and un-retire use. Retired takes are in the history too, where they would sit if they were live, with `retired` on the label; `u` on one brings that take back. The cropped plate under the cleaned one is left out unless it is all the shot has.
+
+Each press swaps that version into the slot for real: the XML's clip points at the file and its label updates, so it plays in the cut, on the same frame, paused or playing. A note shows where you are (`07 run 00 · 4 / 9`). No file moves. It counts as a change like a reject: quit and **Save changes?** Yes keeps it and renders the video, No puts the XML back. Step back to the version you started on and there is nothing to save, so quitting doesn't ask.
 
 **Approve** copies the file on screen, from whatever rung it's in, to the finals rung as `K_final/NN.<ext>` (named after the shot number). It refuses if that shot already has a final. Rejecting a final moves it to `K_final/retired/` and the slot drops to the rung below.
 

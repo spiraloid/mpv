@@ -401,7 +401,7 @@ local function rung_label(ri, num_text)
     stage = stage:gsub("([^s])s$", "%1")   -- runs -> run, cleaned plates -> cleaned plate
     local pass = ri.sub:match("v%.(%d+)/")
     pass = pass and string.format(" %02d", tonumber(pass)) or ""
-    return (num_text or ri.num) .. " " .. stage .. pass
+    return (num_text or ri.num) .. " " .. stage .. pass .. (ri.retired and " retired" or "")
 end
 
 -- Where a version sits on the tape, oldest to newest: rung letter, then the file's
@@ -422,15 +422,19 @@ local function key_above(a, b)   -- is a later on the tape than b
     return false
 end
 
--- A rung's shot files (recursive, skipping retired/, uncompressed/ and hidden)
-local function rung_files(dir, cache)
-    if cache[dir] then return cache[dir] end
+-- A rung's shot files (recursive, skipping retired/, uncompressed/ and hidden).
+-- all: the shot's whole history instead, with the takes under retired/ and the
+-- drivers (NN_driver.<ext>) too; only Up / Down looks at those.
+local function rung_files(dir, cache, all)
+    local ckey = all and (dir .. "|all") or dir
+    if cache[ckey] then return cache[ckey] end
     local out = {}
     local function walk(d, depth)
         if depth > 6 then return end
         for _, f in ipairs(utils.readdir(d, "files") or {}) do
             local num, rest, ext = f:match("^(%d+)(.-)%.([^%.]+)$")
-            if num and (rest == "" or rest:match("^_v%d+$")) and VIDEO_EXT[ext:lower()] then
+            if num and (rest == "" or rest:match("^_v%d+$") or (all and rest == "_driver"))
+               and VIDEO_EXT[ext:lower()] then
                 local p = utils.join_path(d, f)
                 local info = utils.file_info(p)
                 if info and info.is_file then
@@ -440,11 +444,12 @@ local function rung_files(dir, cache)
             end
         end
         for _, sd in ipairs(utils.readdir(d, "dirs") or {}) do
-            if not SKIP_DIRS[sd:lower()] and sd:sub(1, 1) ~= "." then walk(utils.join_path(d, sd), depth + 1) end
+            local skip = SKIP_DIRS[sd:lower()] and not (all and sd:lower() == "retired")
+            if not skip and sd:sub(1, 1) ~= "." then walk(utils.join_path(d, sd), depth + 1) end
         end
     end
     walk(dir, 0)
-    cache[dir] = out
+    cache[ckey] = out
     return out
 end
 
@@ -496,6 +501,8 @@ local function resolve_source(path, enabled, cache)
     if not path then return nil, "missing" end
     local ri = rung_info(path)
     if ri then
+        -- a retired take picked with Up / Down: the XML plays it where it lies
+        if ri.retired and enabled and exists(path) then return path, "xml" end
         local live = live_path(ri)
         if exists(live) then return live, "xml" end
         local alt = walk_down(ri, cache)
@@ -543,6 +550,16 @@ local function next_up(shots, nn, play_path, cache)
         end
     end
     return best
+end
+
+-- What un-retire brings back: the take on screen when it is itself retired (picked
+-- with Up / Down), else the retired one just above it
+local function undo_for(ri, play, cache)
+    if play and ri.retired then
+        local orig = live_path(ri)
+        return not exists(orig) and {ret_path = play, orig_path = orig} or nil
+    end
+    return next_up(ri.shots, ri.nn, play, cache)
 end
 
 -- The latest state of shot nn: the newest live file in the highest rung that has one
@@ -606,8 +623,8 @@ local function build_assembly(xml_path, seq)
                                  detail = ri and not rejected and not is_missing and not ri.retired
                                           and version_detail(ri, c.resolved, cache) or nil,
                                  refs = refs, rung = ri,
-                                 undo = ri and next_up(ri.shots, ri.nn,
-                                                       (not rejected and not is_missing) and c.resolved or nil, cache) or nil,
+                                 undo = ri and undo_for(ri, (not rejected and not is_missing) and c.resolved or nil,
+                                                        cache) or nil,
                                  approved = ri and not ri.retired and exists(final_path(ri)) or false}
             if ri then review_layout = true end
             if rejected then retired = retired + 1 end
@@ -958,7 +975,7 @@ local function validate(asm, seq, xml_path)
         elseif c.how == "rejected" and c.enabled then
             fix[#fix + 1] = string.format("%s: every version is retired, but the XML still plays it", who(c))
         end
-        if ri and not ri.retired and (c.how == "xml" or c.how == "walked") then
+        if ri and (c.how == "xml" or c.how == "walked") then
             local top = top_version(ri.shots, ri.nn, cache)
             if top and slash(top) ~= slash(c.resolved) then
                 fix[#fix + 1] = string.format("%s: plays %s; latest is %s", who(c), version_text(c.resolved), version_text(top))
@@ -1447,8 +1464,8 @@ local function shot_buttons(shot)
     if asm.review_layout then
         local ri = shot.rung
         if not ri then return nil end
-        if shot.retired or shot.missing then
-            -- nothing left below: undo (if there is one) and a grayed-out reject
+        if shot.retired or shot.missing or ri.retired then
+            -- nothing left below, or a retired take: undo (if there is one) and a grayed-out reject
             return shot.undo and {undo_btn, reject_off} or nil
         end
         local list = {}
@@ -1681,7 +1698,8 @@ local function retire()
     local clip = asm.seq.video[shot.idx]
     if asm.review_layout then
         local ri = shot.rung
-        if not ri or ri.retired then osd("only clips in a lettered rung folder can be rejected", 2); return end
+        if ri and ri.retired then osd("this take is already retired", 1.5); return end
+        if not ri then osd("only clips in a lettered rung folder can be rejected", 2); return end
         if exists(retired_path(ri)) then
             osd(ri.rung .. "/retired/" .. ri.sub .. " already exists; not rejected", 3); return
         end
@@ -1728,7 +1746,7 @@ local function restore()
     if asm.review_layout then
         local ri = shot.rung
         local live = not shot.retired and not shot.missing and shot.play or nil
-        local e = ri and next_up(ri.shots, ri.nn, live, {})
+        local e = ri and undo_for(ri, live, {})
         if not e then osd("nothing newer to bring back", 1.5); return end
         pending_action = {
             kind = "restore", review = true, xml = asm.xml, entry = e, shots = ri.shots,
@@ -1774,6 +1792,7 @@ local function approve()
     if not shot or approving then return end
     if shot.retired then restore(); return end  -- on a rejected slot, a is the undo button
     local ri = shot.rung
+    if ri and ri.retired and not shot.missing then osd("this take is retired; un-retire it first", 2); return end
     if not ri or ri.retired or shot.missing then
         osd("only clips in a lettered rung folder can be approved", 2); return
     end
@@ -1899,24 +1918,39 @@ local function ass_header(w, h)
     }
 end
 
--- ── Up / Down: swap in another version of the shot ────────────────────────────
--- Up puts the next newer version of the shot on screen into its slot, Down the
--- next older, in tape order (rung, then file date, as reject and un-retire use),
--- wrapping at either end. The swap is real: the XML's clip points at that file,
--- so it plays in the cut and approve / reject / un-retire act on it. No file
--- moves. Like any change, Save changes? No puts the XML back.
+-- ── Up / Down: a shot's history ───────────────────────────────────────────────
+-- Every version of the shot on screen, in tape order (rung, then file date, as
+-- reject and un-retire use): the final at the bottom, then candidates, drivers,
+-- runs, and the cleaned plate at the top. Retired takes sit where they would if
+-- they were live. Up swaps the next older one into the slot, Down the next
+-- newer; the ends stop. The swap is real: the XML's clip points at that file, so
+-- it plays in the cut. No file moves. Like any change, Save changes? No puts the
+-- XML back.
 
--- Every live version of shot nn, oldest first
-local function shot_versions(shots, nn)
-    local list, cache, sdir = {}, {}, native_seps(shots)
+-- Shot nn's history, oldest first. The cropped plate under the cleaned one is
+-- left out, unless it is all the shot has or it is what the slot shows (keep).
+local function shot_history(shots, nn, keep)
+    local all, cache, sdir = {}, {}, native_seps(shots)
+    local cleaned = false
     for _, d in ipairs(utils.readdir(sdir, "dirs") or {}) do
         if d:match("^%u_") then
-            for _, f in ipairs(rung_files(utils.join_path(sdir, d), cache)) do
-                if f.nn == nn then list[#list + 1] = f end
+            for _, f in ipairs(rung_files(utils.join_path(sdir, d), cache, true)) do
+                if f.nn == nn then
+                    all[#all + 1] = f
+                    if f.vk[1] == "B" then cleaned = true end
+                end
             end
         end
     end
-    table.sort(list, function(a, b) return key_above(b.vk, a.vk) end)
+    local list, here = {}, keep and slash(keep)
+    for _, f in ipairs(all) do
+        if not (cleaned and f.vk[1] == "A" and slash(f.path) ~= here) then list[#list + 1] = f end
+    end
+    table.sort(list, function(a, b)
+        if key_above(b.vk, a.vk) then return true end
+        if key_above(a.vk, b.vk) then return false end
+        return a.path < b.path   -- a retired take beside a live one at the same place
+    end)
     return list
 end
 
@@ -1924,19 +1958,22 @@ local function version_step(dir)
     local asm = state.assembly
     if not asm or asm.generated then return end
     local shot = current_shot()
-    if not shot or not shot.rung or shot.retired or shot.missing or not shot.play then
-        osd("no versions to show here", 1); return
-    end
-    local list = shot_versions(shot.rung.shots, shot.rung.nn)
+    if not shot or not shot.rung then osd("no versions to show here", 1); return end
     -- a press can land before the last swap has loaded: step on from that one
     local from = (browse and browse.idx == shot.idx) and browse.path or shot.play
-    local home
-    for j, f in ipairs(list) do if slash(f.path) == slash(from) then home = j end end
-    if not home then
-        for j, f in ipairs(list) do if slash(f.path) == slash(shot.play) then home = j end end
+    local list = shot_history(shot.rung.shots, shot.rung.nn, from)
+    local function find(path)
+        if not path then return nil end
+        for j, f in ipairs(list) do if slash(f.path) == slash(path) then return j end end
     end
-    if not home or #list < 2 then osd("no other versions of this shot", 1); return end
-    local k = (home - 1 + dir) % #list + 1
+    local home = find(from) or find(shot.play)
+    if #list == 0 or (home and #list < 2) then osd("no other versions of this shot", 1); return end
+    local k = home and (home + dir) or #list   -- nothing on screen: the newest there is
+    if k < 1 or k > #list then
+        osd(string.format("%s  ·  %d / %d  ·  %s", rung_label(rung_info(list[home].path), shot.num_text),
+                          home, #list, dir < 0 and "oldest version" or "newest version"), 1.5)
+        return
+    end
     local f = list[k]
     local clip = asm.seq.video[shot.idx]
     browse = {idx = shot.idx, path = f.path}
@@ -1949,8 +1986,8 @@ end
 
 mp.add_key_binding(nil, "shot_next", shot_next, {repeatable = true})
 mp.add_key_binding(nil, "shot_prev", shot_prev, {repeatable = true})
-mp.add_key_binding(nil, "version_up", function() version_step(1) end, {repeatable = true})
-mp.add_key_binding(nil, "version_down", function() version_step(-1) end, {repeatable = true})
+mp.add_key_binding(nil, "version_up", function() version_step(-1) end, {repeatable = true})    -- older
+mp.add_key_binding(nil, "version_down", function() version_step(1) end, {repeatable = true})   -- newer
 mp.add_key_binding(nil, "retire", retire)
 mp.add_key_binding(nil, "approve", approve)
 mp.add_key_binding(nil, "undo", restore)
@@ -2100,8 +2137,14 @@ local function revert_session()
                         if exists(dir) or name_of(dir) == "retired" then break end
                         dir = dir_of(dir)
                     end
-                elseif ri and slash(dir) ~= ri.shots .. "/" .. ri.rung then
-                    remove_empty_dir(dir)
+                elseif ri then
+                    -- the run / pass folders made to take the file back, up to the rung
+                    local top = ri.shots .. "/" .. ri.rung
+                    while #slash(dir) > #top do
+                        remove_empty_dir(dir)
+                        if exists(dir) then break end
+                        dir = dir_of(dir)
+                    end
                 end
             else
                 failed = failed + 1
