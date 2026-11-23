@@ -304,6 +304,7 @@ end
 local state = {}            -- per loaded file: path, shots, fps, assembly
 local pending_assembly      -- built in on_load, claimed on file-loaded
 local pending_action        -- reject / restore, carried out in on_load
+local browse                -- last Up / Down swap {idx, path}, until it has loaded
 local export = {dirty = false}  -- assembly changed this session: render it on exit
 -- Everything this mpv session did on disk, so "No" on exit can put it back:
 -- snap[xml] = the XML's text (and whether a .bak existed) when first opened;
@@ -881,8 +882,8 @@ local function do_restore(p)
     p.notice = "restored: " .. p.name
 end
 
--- Enter on an Up / Down still: the clip's slot now plays that version. Only the
--- XML changes (pathurl + label); nothing moves on disk.
+-- Up / Down: the clip's slot now plays that version. Only the XML changes
+-- (pathurl + label); nothing moves on disk.
 local function do_pick(p)
     local text = read_file(p.xml)
     if not text then osd("couldn't read the XML", 3); return end
@@ -896,7 +897,7 @@ local function do_pick(p)
     if read_file(bak) == new_text then os.remove(bak) end
     session.journal[#session.journal + 1] = {xml_edit = p.xml}
     msg.info("picked " .. p.path)
-    p.notice = "in the edit: " .. label
+    p.notice = label .. (p.k and string.format("  ·  %d / %d", p.k, p.n) or "")
 end
 
 -- ── validation: does the XML match the folders? ───────────────────────────────
@@ -1317,6 +1318,7 @@ mp.register_event("file-loaded", function()
 
     local asm = pending_assembly
     pending_assembly = nil
+    if not pending_action then browse = nil end
     if asm and asm.url == path then
         state.assembly = asm
         state.shots = asm.shots
@@ -1422,7 +1424,6 @@ local buttons = {}          -- drawn buttons: name, x0, y0, x1, y1, enabled
 local hovered               -- name of the enabled button under the mouse
 local approving = false
 local update_hover          -- defined with the mouse handling below
-local preview = {gen = 0, files = {}}   -- Up / Down still of another version (see below)
 
 local function ass_text(s) return (s:gsub("\\", "\\\\"):gsub("{", "\\{"):gsub("}", "\\}")) end
 
@@ -1633,7 +1634,7 @@ local function render(force)
     if not shot or not d or not d.w or d.w <= 0 then clear_overlay(); return end
     local key = table.concat({i, d.w, d.h, d.ml, d.mt, d.mr, d.mb, tostring(hovered),
                               tostring(shot.approved), tostring(approving), tostring(overlay_on),
-                              tostring(mp.get_property_bool("pause")), tostring(preview.shown)}, ":")
+                              tostring(mp.get_property_bool("pause"))}, ":")
     if key == overlay_key and not force then return end
 
     -- video rectangle inside the window (letterbox margins)
@@ -1644,8 +1645,7 @@ local function render(force)
     if shot.retired then rejected_events(events, vx0, vy0, vw, vh, k, "REJECTED")
     elseif shot.missing then rejected_events(events, vx0, vy0, vw, vh, k, "MISSING") end
     buttons = {}
-    -- a preview still carries its own label; its buttons would act on the real shot
-    if overlay_on and not preview.shown then
+    if overlay_on then
         label_events(events, shot, vx0, vy0, vw, vh, k)
         button_events(events, shot, vx0, vy0, vw, k)
     end
@@ -1884,7 +1884,7 @@ local function toggle_overlay()
     osd(overlay_on and "overlay on" or "overlay off", 1)
 end
 
--- ASS file head for labels burned into a w x h picture (export, preview stills)
+-- ASS file head for labels burned into a w x h picture (the export)
 local function ass_header(w, h)
     return {
         "[Script Info]", "ScriptType: v4.00+", "PlayResX: " .. w, "PlayResY: " .. h,
@@ -1899,15 +1899,12 @@ local function ass_header(w, h)
     }
 end
 
--- ── Up / Down: a still of another version of the shot ─────────────────────────
--- Up shows the next newer version of the shot on screen, Down the next older, in
--- tape order (rung, then file date, as reject and un-retire use), wrapping at
--- either end. It pauses and shows a still: a hidden mpv grabs that version's frame
--- at the same point in the shot, label burned in, and it is drawn over the video.
--- Nothing moves and the XML is untouched. Play, or leaving the frame, puts the
--- real assembly back; Enter puts the version on screen in the edit instead.
-
-local PREVIEW_ID = 7    -- overlay-add slot
+-- ── Up / Down: swap in another version of the shot ────────────────────────────
+-- Up puts the next newer version of the shot on screen into its slot, Down the
+-- next older, in tape order (rung, then file date, as reject and un-retire use),
+-- wrapping at either end. The swap is real: the XML's clip points at that file,
+-- so it plays in the cut and approve / reject / un-retire act on it. No file
+-- moves. Like any change, Save changes? No puts the XML back.
 
 -- Every live version of shot nn, oldest first
 local function shot_versions(shots, nn)
@@ -1923,176 +1920,41 @@ local function shot_versions(shots, nn)
     return list
 end
 
-local function preview_hide()
-    if preview.shown then
-        mp.commandv("overlay-remove", tostring(PREVIEW_ID))
-        preview.shown = false
-        render(true)
-    end
-end
-
-local function preview_clear()
-    preview.gen = preview.gen + 1          -- drop grabs still running
-    preview_hide()
-    preview.active, preview.list, preview.shot, preview.pos = nil, nil, nil, nil
-    for _, f in pairs(preview.files) do os.remove(f) end
-    preview.files = {}
-end
-
-local function preview_show(file, x, y, w, h)
-    mp.commandv("overlay-add", tostring(PREVIEW_ID), tostring(x), tostring(y), file, "0", "bgra",
-                tostring(w), tostring(h), tostring(w * 4))
-    preview.shown = true
-    render(true)
-end
-
--- Grab version k's frame at the playhead, sized to the video on screen
-local function preview_grab()
-    local shot = state.shots and state.shots[preview.shot]
-    local f = preview.list[preview.k]
-    local d = mp.get_property_native("osd-dimensions")
-    if not shot or not d or not d.w or d.w <= 0 then return end
-    local x, y = round(d.ml), round(d.mt)
-    local w, h = round(d.w - d.ml - d.mr), round(d.h - d.mt - d.mb)
-    if w < 16 or h < 16 then return end
-    local pos = mp.get_property_number("time-pos") or shot.t
-    preview.pos = pos
-    -- every version covers the shot's cut from its first frame; past its end,
-    -- the grab gets its last frame
-    local t = math.max(0, pos - shot.t) + 0.25 / (state.fps or 24)
-    local key = table.concat({f.path, string.format("%.3f", t), w, h, tostring(overlay_on)}, "|")
-    if preview.files[key] then preview_show(preview.files[key], x, y, w, h); return end
-
-    preview.gen = preview.gen + 1
-    local gen = preview.gen
-    local base = utils.join_path(temp_dir(), string.format("mpv_preview_%d_%d", utils.getpid(), gen))
-    local out = base .. ".bgra"
-    local args = {mpv_binary(), "--no-config", "--msg-level=all=error", "--audio=no", "--sub-auto=no",
-                  "--start=" .. num(t), "--frames=1", "--hr-seek=yes",
-                  string.format("--vf=lavfi=[scale=%d:%d:force_original_aspect_ratio=decrease," ..
-                                "pad=%d:%d:(ow-iw)/2:(oh-ih)/2,format=bgra]", w, h, w, h),
-                  "--of=rawvideo", "--ovc=rawvideo", "--o=" .. out}
-    local ass
-    if overlay_on then
-        local ri = rung_info(f.path)
-        local events = {}
-        label_events(events, {
-            label = rung_label(ri, shot.num_text),
-            detail = string.format("%s · %d / %d", os.date("%m-%d %H:%M", f.mtime), preview.k, #preview.list),
-        }, 0, 0, w, h, h / 1080)
-        local lines = ass_header(w, h)
-        for _, e in ipairs(events) do
-            lines[#lines + 1] = "Dialogue: 0,0:00:00.00,9:59:59.00,Default,,0,0,0,," .. e
-        end
-        ass = base .. ".ass"
-        if write_file(ass, table.concat(lines, "\n") .. "\n") then
-            args[#args + 1] = "--sub-file=" .. ass
-        else
-            ass = nil
-        end
-    end
-    args[#args + 1] = f.path
-    mp.command_native_async({name = "subprocess", args = args, playback_only = false,
-                             capture_stdout = true, capture_stderr = true}, function(_, r)
-        if ass then os.remove(ass) end
-        local info = utils.file_info(out)
-        if gen ~= preview.gen or not preview.active then os.remove(out); return end
-        if not (r and r.status == 0 and info and info.size == w * h * 4) then
-            os.remove(out)
-            msg.warn("preview grab failed for " .. f.path .. ": " .. tostring(r and r.stderr))
-            osd("couldn't read " .. name_of(f.path), 2)
-            return
-        end
-        preview.files[key] = out
-        preview_show(out, x, y, w, h)
-    end)
-end
-
 local function version_step(dir)
-    if not state.assembly then return end
-    local i = current_shot_index()
-    local shot = i and state.shots[i]
-    if preview.active and preview.shot ~= i then preview_clear() end
-    if not preview.active then
-        if not shot or not shot.rung or shot.retired or shot.missing or not shot.play then
-            osd("no versions to show here", 1); return
-        end
-        local list = shot_versions(shot.rung.shots, shot.rung.nn)
-        local home
-        for j, f in ipairs(list) do if slash(f.path) == slash(shot.play) then home = j end end
-        if not home or #list < 2 then osd("no other versions of this shot", 1); return end
-        preview.active, preview.shot, preview.list, preview.home, preview.k = true, i, list, home, home
-    end
-    local n = #preview.list
-    preview.k = (preview.k - 1 + dir) % n + 1
-    osd(string.format("%d / %d%s", preview.k, n,
-        preview.k == preview.home and "  (in the edit)" or "  ·  Enter puts it in the edit"), 1.5)
-    if preview.k == preview.home then
-        preview.gen = preview.gen + 1
-        preview.pos = mp.get_property_number("time-pos")
-        preview_hide()
-        return
-    end
-    if mp.get_property_bool("pause") then
-        preview_grab()
-    else
-        preview.pos = nil
-        mp.set_property_bool("pause", true)
-        local gen = preview.gen
-        -- let the pause land so the grab matches the frame that stays up
-        mp.add_timeout(0.1, function() if preview.active and gen == preview.gen then preview_grab() end end)
-    end
-end
-
-mp.observe_property("pause", "bool", function(_, p) if p == false and preview.active then preview_clear() end end)
-mp.observe_property("time-pos", "number", function(_, pos)
-    if preview.active and preview.pos and pos and math.abs(pos - preview.pos) > frame_slack() then
-        preview_clear()
-    end
-end)
-mp.observe_property("osd-dimensions", "native", function() if preview.active then preview_clear() end end)
-mp.register_event("end-file", function() if preview.active then preview_clear() end end)
-mp.register_event("shutdown", function() for _, f in pairs(preview.files) do os.remove(f) end end)
-
--- Enter on a still: put that version in the edit (the XML's clip points at it).
--- A change like any other: Save Yes keeps it, No puts the XML back.
--- Anywhere else Enter keeps its usual job, fullscreen.
-local function version_apply()
-    if not preview.shown then mp.command("cycle fullscreen"); return end
     local asm = state.assembly
-    local shot = asm and state.shots[preview.shot]
-    local f = preview.list[preview.k]
-    if not shot or not f then return end
-    local clip = asm.seq.video[shot.idx]
-    local pos = preview.pos or mp.get_property_number("time-pos") or shot.t
-    preview_clear()
-    pending_action = {kind = "pick", xml = asm.xml, path = f.path, file_key = clip.file_key,
-                      pathurl = clip.pathurl, num_text = shot.num_text, pos = pos}
-    osd("putting " .. rung_label(rung_info(f.path), shot.num_text) .. " in the edit…", 1)
-    mp.commandv("loadfile", state.path, "replace")
-end
-
--- While a still is up, a / r / u would act on the real shot underneath
-local function unless_preview(fn)
-    return function()
-        if preview.shown then osd("preview: Enter puts it in the edit; play goes back", 2); return end
-        if preview.active then preview_clear() end
-        fn()
+    if not asm or asm.generated then return end
+    local shot = current_shot()
+    if not shot or not shot.rung or shot.retired or shot.missing or not shot.play then
+        osd("no versions to show here", 1); return
     end
+    local list = shot_versions(shot.rung.shots, shot.rung.nn)
+    -- a press can land before the last swap has loaded: step on from that one
+    local from = (browse and browse.idx == shot.idx) and browse.path or shot.play
+    local home
+    for j, f in ipairs(list) do if slash(f.path) == slash(from) then home = j end end
+    if not home then
+        for j, f in ipairs(list) do if slash(f.path) == slash(shot.play) then home = j end end
+    end
+    if not home or #list < 2 then osd("no other versions of this shot", 1); return end
+    local k = (home - 1 + dir) % #list + 1
+    local f = list[k]
+    local clip = asm.seq.video[shot.idx]
+    browse = {idx = shot.idx, path = f.path}
+    pending_action = {kind = "pick", xml = asm.xml, path = f.path, file_key = clip.file_key,
+                      pathurl = clip.pathurl, num_text = shot.num_text, k = k, n = #list,
+                      pos = mp.get_property_number("time-pos") or shot.t}
+    osd(string.format("%s  ·  %d / %d", rung_label(rung_info(f.path), shot.num_text), k, #list), 1.5)
+    mp.commandv("loadfile", state.path, "replace")
 end
 
 mp.add_key_binding(nil, "shot_next", shot_next, {repeatable = true})
 mp.add_key_binding(nil, "shot_prev", shot_prev, {repeatable = true})
 mp.add_key_binding(nil, "version_up", function() version_step(1) end, {repeatable = true})
 mp.add_key_binding(nil, "version_down", function() version_step(-1) end, {repeatable = true})
-mp.add_key_binding(nil, "version_apply", version_apply)
-mp.add_key_binding(nil, "retire", unless_preview(retire))
-mp.add_key_binding(nil, "approve", unless_preview(approve))
-mp.add_key_binding(nil, "undo", unless_preview(restore))
-mp.add_key_binding(nil, "toggle_overlay", function()
-    if preview.active then preview_clear() end
-    toggle_overlay()
-end)
+mp.add_key_binding(nil, "retire", retire)
+mp.add_key_binding(nil, "approve", approve)
+mp.add_key_binding(nil, "undo", restore)
+mp.add_key_binding(nil, "toggle_overlay", toggle_overlay)
 
 -- ── export: render the assembly to <xml name>.mp4 ────────────────────────────
 -- Matches the burned-in dailies: H.264 High, CRF 18 (medium), the edit's frame
@@ -2407,6 +2269,18 @@ show_validation = function(asm)
     })
 end
 
+-- Is the disk any different from when the session started? Stepping Up / Down
+-- and back leaves journal entries but the same XML: nothing to ask about.
+local function session_changed()
+    for _, e in ipairs(session.journal) do
+        if not e.xml_edit then return true end
+    end
+    for xml, snap in pairs(session.snap) do
+        if read_file(xml) ~= snap.text then return true end
+    end
+    return false
+end
+
 local function quit_request()
     if export.running then           -- second quit while saving: skip the video
         export.skip = true
@@ -2416,7 +2290,7 @@ local function quit_request()
     end
     if export.prompting then return end
     if pending_action then mp.add_timeout(0.2, quit_request); return end  -- let it land first
-    if #session.journal > 0 and not encoding then open_prompt() else mp.command("quit") end
+    if session_changed() and not encoding then open_prompt() else mp.command("quit") end
 end
 
 choose = function(i)
