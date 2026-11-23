@@ -311,7 +311,7 @@ local export = {dirty = false}  -- assembly changed this session: render it on e
 local session = {snap = {}, journal = {}}
 local function journal_move(from, to) session.journal[#session.journal + 1] = {from = from, to = to} end
 local encoding = (mp.get_property("o") or "") ~= ""   -- running as the exporter itself
-local add_burn_in, bind_quit_keys   -- defined with the export code below
+local add_burn_in, bind_quit_keys, show_validation   -- defined further down
 local scan                  -- running scan: path, token, log, offset, buf, cuts
 local scanned = {}          -- path -> finished cut list for this session
 local scan_timer
@@ -403,21 +403,15 @@ local function rung_label(ri, num_text)
     return (num_text or ri.num) .. " " .. stage .. pass
 end
 
--- Where a version sits on the tape, oldest to newest, the way the pipeline ranks
--- them: rung letter, pass (v.NNN), run folder (named by time, "11-22__1242"),
--- _v# in the file name, then modified time and path as tie-breaks. Retired and
--- live copies of a file get the same key.
+-- Where a version sits on the tape, oldest to newest: rung letter, then the file's
+-- modified time (the moment the take was written; copies keep it), then path as a
+-- tie-break. Not the pass number or the run folder name: passes get uploaded out
+-- of order and run folders are named on different clocks. Retired and live copies
+-- of a file get the same key.
 local function version_key(path, mtime)
     local ri = rung_info(path)
     if not ri then return nil end
-    local sub = ri.retired and ri.sub:gsub("^retired/", "", 1) or ri.sub
-    local pass = tonumber(sub:match("v%.(%d+)/") or "") or -1
-    local run = ""
-    local dirs = {}
-    for part in sub:gmatch("([^/]+)/") do dirs[#dirs + 1] = part end
-    for i = #dirs, 1, -1 do if not dirs[i]:match("^v%.%d+$") then run = dirs[i]; break end end
-    local v = tonumber((sub:match("([^/]+)$") or ""):match("^%d+_v(%d+)%.") or "") or 0
-    return {ri.letter, pass, run, v, mtime or 0, slash(live_path(ri))}
+    return {ri.letter, mtime or 0, slash(live_path(ri))}
 end
 
 local function key_above(a, b)   -- is a later on the tape than b
@@ -454,37 +448,25 @@ local function rung_files(dir, cache)
 end
 
 -- Which version of the shot this is within its rung, for the small line over the
--- label: "11-22 12:42 · 2 of 3". Counts live and retired versions together, oldest
+-- label: "11-21 18:50 · 2 of 3" (file date, place oldest first). Counts live and retired versions together, oldest
 -- first, so the numbers hold still while reject / un-retire move files around.
 -- nil when the rung has only one version of the shot.
 local function version_detail(ri, play_path, cache)
     local rung_dir = native_seps(ri.shots .. "/" .. ri.rung)
     local rows = {}
     for _, f in ipairs(rung_files(rung_dir, cache)) do
-        if f.nn == ri.nn then rows[#rows + 1] = {key = f.vk[6], mtime = f.mtime, vk = f.vk} end
+        if f.nn == ri.nn then rows[#rows + 1] = {key = f.vk[3], mtime = f.mtime, vk = f.vk} end
     end
     for _, f in ipairs(rung_files(utils.join_path(rung_dir, "retired"), cache)) do
-        if f.nn == ri.nn then rows[#rows + 1] = {key = f.vk[6], mtime = f.mtime, vk = f.vk} end
+        if f.nn == ri.nn then rows[#rows + 1] = {key = f.vk[3], mtime = f.mtime, vk = f.vk} end
     end
     if #rows < 2 then return nil end
     table.sort(rows, function(a, b) return key_above(b.vk, a.vk) end)
     local here, idx = slash(play_path), nil
     for i, r in ipairs(rows) do if r.key == here then idx = i end end
     if not idx then return nil end
-    -- when: the run folder ("11-22__1242" -> "11-22 12:42"), else a _v# name, else the file date
-    local when
-    local dirs = {}
-    for part in ri.sub:gmatch("([^/]+)/") do dirs[#dirs + 1] = part end
-    for i = #dirs, 1, -1 do
-        if not dirs[i]:match("^v%.%d+$") then when = dirs[i]; break end
-    end
-    if when then
-        local mo, da, hh, mi = when:match("^(%d%d)%-(%d%d)__(%d%d)(%d%d)$")
-        if mo then when = string.format("%s-%s %s:%s", mo, da, hh, mi) end
-    else
-        local vtag = (ri.sub:match("([^/]+)$") or ""):match("^%d+(_v%d+)%.")
-        when = vtag and vtag:sub(2) or os.date("%m-%d %H:%M", rows[idx].mtime)
-    end
+    -- when: the file's date, the same clock the order uses
+    local when = os.date("%m-%d %H:%M", rows[idx].mtime)
     return string.format("%s · %d of %d", when, idx, #rows)
 end
 
@@ -526,7 +508,7 @@ end
 
 -- ── the playhead: reject rewinds, un-retire goes forward ─────────────────────
 -- A shot's versions sit on a tape ordered by version_key: higher rung is later,
--- then higher pass, later run folder, higher _v#, newer file. Reject retires what's showing and
+-- then newer file. Reject retires what's showing and
 -- the slot drops to the next live file down (walk_down). Un-retire brings back
 -- the retired file closest *above* what's showing, so pressing it on repeat
 -- climbs back to the latest. No log: whatever sits in a <rung>/retired/ folder
@@ -560,6 +542,20 @@ local function next_up(shots, nn, play_path, cache)
         end
     end
     return best
+end
+
+-- The latest state of shot nn: the newest live file in the highest rung that has one
+local function top_version(shots, nn, cache)
+    local best
+    local sdir = native_seps(shots)
+    for _, d in ipairs(utils.readdir(sdir, "dirs") or {}) do
+        if d:match("^%u_") then
+            for _, f in ipairs(rung_files(utils.join_path(sdir, d), cache)) do
+                if f.nn == nn and (not best or key_above(f.vk, best.vk)) then best = f end
+            end
+        end
+    end
+    return best and best.path or nil
 end
 
 local function build_assembly(xml_path, seq)
@@ -885,6 +881,143 @@ local function do_restore(p)
     p.notice = "restored: " .. p.name
 end
 
+-- ── validation: does the XML match the folders? ───────────────────────────────
+
+local function short_path(path, xml_dir)
+    local p, d = slash(path), slash(xml_dir) .. "/"
+    if p:sub(1, #d) == d then return p:sub(#d + 1) end
+    return p
+end
+
+local function version_text(path)
+    local ri = rung_info(path)
+    local info = utils.file_info(path)
+    local when = info and os.date(" (%m-%d %H:%M)", info.mtime) or ""
+    return (ri and rung_label(ri):gsub("^%S+ ", "") or name_of(path)) .. when
+end
+
+-- Returns {fixable = {lines}, notes = {lines}}. Fixable means Regenerate resolves it.
+local function validate(asm, seq, xml_path)
+    local fix, notes = {}, {}
+    local xml_dir = dir_of(xml_path)
+    local cache = {}
+    local function who(c)
+        local l = c.label and xml_unescape(c.label)
+        return (l and l:match("^(%d%S*)")) or c.name or "clip"
+    end
+    -- structure
+    local prev_end, prev
+    for _, c in ipairs(seq.video) do
+        if c.start and c.start >= 0 and c["end"] then
+            if prev_end and c.start ~= prev_end then
+                notes[#notes + 1] = string.format("%s: %s of %d frames before it", who(c),
+                    c.start > prev_end and "gap" or "overlap", math.abs(c.start - prev_end))
+            end
+            if c.out and c["in"] and (c.out - c["in"]) ~= (c["end"] - c.start) then
+                notes[#notes + 1] = string.format("%s: slot is %d frames but its in/out covers %d",
+                    who(c), c["end"] - c.start, c.out - c["in"])
+            end
+            prev_end, prev = c["end"], c
+        end
+    end
+    if seq.duration and prev_end and seq.duration ~= prev_end then
+        notes[#notes + 1] = string.format("sequence says %d frames, clips end at %d", seq.duration, prev_end)
+    end
+    -- each slot against the folders
+    for _, c in ipairs(seq.video) do
+        local named = c.xml_path
+        local ri = rung_info(c.resolved or named)
+        if c.how == "missing" then
+            local nri = named and rung_info(named)
+            local alt = nri and top_version(nri.shots, nri.nn, cache)
+            local line = string.format("%s: no file at %s", who(c), short_path(named or "?", xml_dir))
+            if alt then fix[#fix + 1] = line .. "; latest is " .. version_text(alt)
+            else notes[#notes + 1] = line .. " (no other version of the shot)" end
+        elseif c.how == "walked" then
+            fix[#fix + 1] = string.format("%s: names %s, which is retired or gone; playing %s",
+                who(c), short_path(named, xml_dir), version_text(c.resolved))
+        elseif c.how == "rejected" and c.enabled then
+            fix[#fix + 1] = string.format("%s: every version is retired, but the XML still plays it", who(c))
+        end
+        if ri and not ri.retired and (c.how == "xml" or c.how == "walked") then
+            local top = top_version(ri.shots, ri.nn, cache)
+            if top and slash(top) ~= slash(c.resolved) then
+                fix[#fix + 1] = string.format("%s: plays %s; latest is %s", who(c), version_text(c.resolved), version_text(top))
+            end
+        end
+    end
+    -- run folders named on different clocks ("11-22__1242" vs the file's time)
+    local shots_dirs = {}
+    for _, c in ipairs(seq.video) do
+        local ri = rung_info(c.resolved or c.xml_path)
+        if ri then shots_dirs[ri.shots] = true end
+    end
+    for shots in pairs(shots_dirs) do
+        local clocks = {}
+        local sdir = native_seps(shots)
+        for _, d in ipairs(utils.readdir(sdir, "dirs") or {}) do
+            if d:match("^%u_") then
+                for _, f in ipairs(rung_files(utils.join_path(sdir, d), cache)) do
+                    local mo, da, hh, mi = slash(f.path):match("/(%d%d)%-(%d%d)__(%d%d)(%d%d)/[^/]+$")
+                    if mo then
+                        local y = tonumber(os.date("%Y", f.mtime))
+                        local named_t = os.time({year = y, month = tonumber(mo), day = tonumber(da),
+                                                 hour = tonumber(hh), min = tonumber(mi)})
+                        local off = math.floor((named_t - f.mtime) / 3600 + 0.5)
+                        local bucket = math.floor((off + 1) / 3) * 3     -- runs take minutes: group within ~3h
+                        clocks[bucket] = (clocks[bucket] or 0) + 1
+                    end
+                end
+            end
+        end
+        local list = {}
+        for off, n in pairs(clocks) do list[#list + 1] = {off, n} end
+        if #list > 1 then
+            table.sort(list, function(a, b) return a[2] > b[2] end)
+            local parts = {}
+            for _, e in ipairs(list) do parts[#parts + 1] = string.format("%+dh ×%d", e[1], e[2]) end
+            notes[#notes + 1] = "run folders are named on different clocks (" .. table.concat(parts, ", ") ..
+                "), so their names don't sort by time; versions are ordered by file date"
+        end
+    end
+    for _, l in ipairs(fix) do msg.warn("validation: " .. l) end
+    for _, l in ipairs(notes) do msg.info("validation note: " .. l) end
+    return {fixable = fix, notes = notes}
+end
+
+-- Point every rung slot at its shot's latest state. Runs in on_load like the
+-- other actions; timing, soundtrack and non-rung slots are left alone.
+local function do_regen(p)
+    local text = read_file(p.xml)
+    if not text then osd("regenerate failed: could not read the XML", 3); return end
+    local xml_dir = dir_of(p.xml)
+    local seq = parse_xmeml(text, xml_dir)
+    if not seq then osd("regenerate failed: could not parse the XML", 3); return end
+    local cache, changed, new_text = {}, 0, text
+    for _, c in ipairs(seq.video) do
+        local ri = c.path and rung_info(c.path)
+        if ri then
+            local top = top_version(ri.shots, ri.nn, cache)
+            local live = exists(live_path(ri)) and live_path(ri)
+            if top and (not live or slash(top) ~= slash(live) or not c.enabled) then
+                local label = c.label and xml_unescape(c.label)
+                local num_text = label and label:match("^(%d%S*)")
+                local was_url = (c.pathurl or ""):lower():match("^file:") ~= nil
+                new_text = rewrite_xml(new_text, c.file_key, path_to_pathurl(top, xml_dir, was_url), true,
+                                       rung_label(rung_info(top), num_text))
+                changed = changed + 1
+            end
+        end
+    end
+    if changed == 0 then p.notice = "XML already matches the folders"; return end
+    local bak = p.xml .. ".bak"
+    if not exists(bak) then write_file(bak, text) end
+    if not write_file(p.xml, new_text) then osd("regenerate failed: could not write the XML", 3); return end
+    session.journal[#session.journal + 1] = {xml_edit = p.xml}
+    msg.info(string.format("regenerated %s: %d slot(s) re-pointed", p.xml, changed))
+    p.notice = string.format("XML regenerated: %d slot%s re-pointed to the latest version", changed, changed == 1 and "" or "s")
+end
+
 mp.add_hook("on_load", 50, function()
     local url = mp.get_property("stream-open-filename", "")
     if not is_xml(url) or url:find("://", 1, true) then return end
@@ -892,13 +1025,16 @@ mp.add_hook("on_load", 50, function()
     local text = read_file(xml_path)
     if not text or not text:find("<xmeml", 1, true) then return end
 
-    if not session.snap[xml_path] then
+    local first_load = not session.snap[xml_path]
+    if first_load then
         session.snap[xml_path] = {text = text, bak = exists(xml_path .. ".bak")}
     end
     local action = pending_action
     pending_action = nil
     if action and action.xml == xml_path then
-        if action.kind == "reject" then do_retire(action) else do_restore(action) end
+        if action.kind == "reject" then do_retire(action)
+        elseif action.kind == "regen" then do_regen(action)
+        else do_restore(action) end
         if action.notice then export.dirty, export.xml = true, xml_path end
         text = read_file(xml_path) or text
         mp.set_property("file-local-options/start", tostring(action.pos))
@@ -914,6 +1050,7 @@ mp.add_hook("on_load", 50, function()
     asm.url = url
     asm.generated = text:find(GENERATED_MARK, 1, true) ~= nil
     asm.notice = action and action.notice
+    if first_load and not encoding and not asm.generated then asm.issues = validate(asm, seq, xml_path) end
     mp.set_property("stream-open-filename", asm.edl)
     local chain = {}
     if #asm.blank > 0 then
@@ -1164,6 +1301,9 @@ mp.register_event("file-loaded", function()
         if asm.soundtrack then select_soundtrack() end
         if encoding then add_burn_in(); return end
         bind_quit_keys(true)
+        if asm.issues and #asm.issues.fixable > 0 then
+            mp.add_timeout(0.3, function() if state.assembly == asm then show_validation(asm) end end)
+        end
         local notes = {}
         if asm.retired > 0 then notes[#notes + 1] = asm.retired .. " rejected" end
         if asm.missing > 0 then notes[#notes + 1] = asm.missing .. " missing" end
@@ -1864,7 +2004,9 @@ local function revert_session()
     local undone, failed = 0, 0
     for i = #session.journal, 1, -1 do
         local e = session.journal[i]
-        if e.create then
+        if e.xml_edit then
+            undone = undone + 1               -- the XML text is restored below
+        elseif e.create then
             if os.remove(e.create) then undone = undone + 1 else failed = failed + 1 end
         elseif exists(e.to) and not exists(e.from) then
             if mkdir_p(dir_of(e.from)) and move_file(e.to, e.from) then
@@ -1898,89 +2040,153 @@ local function revert_session()
     msg.info(string.format("put back %d change(s)%s", undone, failed > 0 and (", " .. failed .. " failed") or ""))
 end
 
-local prompt = {sel = 2, rects = {}}
-local prompt_overlay = mp.create_osd_overlay("ass-events")
-prompt_overlay.z = 900
-local CHOICES = {"Yes", "No", "Cancel"}
-local prompt_keys = {}
+-- A full-frame card with a title, a few lines and buttons; used by the exit prompt
+-- and the validation check. spec = {title, lines, choices = {{label, keys}},
+-- default, cancel, hint, done(i)}.
+local modal = {rects = {}}
+local modal_overlay = mp.create_osd_overlay("ass-events")
+modal_overlay.z = 900
+local modal_keys = {}
 
-local function draw_prompt()
+local function draw_modal()
+    local spec = modal.spec
+    if not spec then return end
     local d = mp.get_property_native("osd-dimensions") or {w = 1920, h = 1080}
     local w, h = d.w or 1920, d.h or 1080
     local k = h / 1080
-    local moved, made = 0, 0
-    for _, e in ipairs(session.journal) do if e.create then made = made + 1 else moved = moved + 1 end end
-    local what = {}
-    if moved > 0 then what[#what + 1] = moved .. (moved == 1 and " file move" or " file moves") end
-    if made > 0 then what[#what + 1] = made .. (made == 1 and " approved copy" or " approved copies") end
+    local lines = spec.lines or {}
+    local line_h = 34 * k
+    local top = h / 2 - (150 + #lines * 34 / 2) * k
     local ev = {
         string.format("{\\an7\\pos(0,0)\\p1\\bord0\\shad0\\1c&H000000&\\1a&H30&}m 0 0 l %d 0 %d %d 0 %d{\\p0}", w, w, h, h),
-        string.format("{\\an5\\pos(%.1f,%.1f)\\bord0\\shad0\\b1\\q2\\1c&HFFFFFF&\\1a&H00&\\fs%.1f}Save changes?",
-            w / 2, h / 2 - 130 * k, 96 * k),
-        string.format("{\\an5\\pos(%.1f,%.1f)\\bord0\\shad0\\q2\\1c&HC0C0C0&\\1a&H00&\\fs%.1f}%s this session.  " ..
-            "Yes keeps them and renders the video.  No puts everything back as it was when opened.",
-            w / 2, h / 2 - 50 * k, 26 * k, ass_text(table.concat(what, ", ")))
+        string.format("{\\an5\\pos(%.1f,%.1f)\\bord0\\shad0\\b1\\q2\\1c&HFFFFFF&\\1a&H00&\\fs%.1f}%s",
+            w / 2, top, (spec.title_fs or 80) * k, ass_text(spec.title)),
     }
-    local bw, bh, gap = 240 * k, 84 * k, 36 * k
-    local x = w / 2 - (3 * bw + 2 * gap) / 2
-    local y = h / 2 + 20 * k
-    prompt.rects = {}
-    for i, label in ipairs(CHOICES) do
-        local sel = i == prompt.sel
+    local y = top + 80 * k
+    for _, line in ipairs(lines) do
+        ev[#ev + 1] = string.format("{\\an5\\pos(%.1f,%.1f)\\bord0\\shad0\\q2\\1c&HC8C8C8&\\1a&H00&\\fs%.1f}%s",
+            w / 2, y, 25 * k, ass_text(line))
+        y = y + line_h
+    end
+    local n = #spec.choices
+    local bw, bh, gap = (spec.button_w or 240) * k, 84 * k, 36 * k
+    local x = w / 2 - (n * bw + (n - 1) * gap) / 2
+    y = y + 30 * k
+    modal.rects = {}
+    for i, ch in ipairs(spec.choices) do
+        local sel = i == modal.sel
         ev[#ev + 1] = string.format(
             "{\\an7\\pos(0,0)\\p1\\bord%.2f\\shad0\\1c&H%s&\\1a&H%s&\\3c&HFFFFFF&\\3a&H%s&}m %.0f %.0f l %.0f %.0f %.0f %.0f %.0f %.0f{\\p0}",
             2 * k, sel and "FFFFFF" or "3A3A3A", sel and "00" or "30", sel and "00" or "90",
             x, y, x + bw, y, x + bw, y + bh, x, y + bh)
         ev[#ev + 1] = string.format("{\\an5\\pos(%.1f,%.1f)\\bord0\\shad0\\b1\\q2\\1c&H%s&\\1a&H00&\\fs%.1f}%s",
-            x + bw / 2, y + bh / 2, sel and "000000" or "FFFFFF", 40 * k, label)
-        prompt.rects[i] = {x, y, x + bw, y + bh}
+            x + bw / 2, y + bh / 2, sel and "000000" or "FFFFFF", 38 * k, ass_text(ch.label))
+        modal.rects[i] = {x, y, x + bw, y + bh}
         x = x + bw + gap
     end
-    ev[#ev + 1] = string.format("{\\an5\\pos(%.1f,%.1f)\\bord0\\shad0\\q2\\1c&H909090&\\1a&H00&\\fs%.1f}" ..
-        "Y  yes   ·   N  no   ·   C or Esc  cancel   ·   ← →  then Enter",
-        w / 2, y + bh + 50 * k, 24 * k)
-    prompt_overlay.res_x, prompt_overlay.res_y = w, h
-    prompt_overlay.data = table.concat(ev, "\n")
-    prompt_overlay:update()
+    if spec.hint then
+        ev[#ev + 1] = string.format("{\\an5\\pos(%.1f,%.1f)\\bord0\\shad0\\q2\\1c&H909090&\\1a&H00&\\fs%.1f}%s",
+            w / 2, y + bh + 50 * k, 24 * k, ass_text(spec.hint))
+    end
+    modal_overlay.res_x, modal_overlay.res_y = w, h
+    modal_overlay.data = table.concat(ev, "\n")
+    modal_overlay:update()
+end
+
+local function close_modal()
+    modal.spec = nil
+    export.prompting = false
+    modal_overlay:remove()
+    for _, name in ipairs(modal_keys) do mp.remove_key_binding(name) end
+    modal_keys = {}
+    hide_osc(false)
+end
+
+local function open_modal(spec)
+    modal.spec = spec
+    modal.sel = spec.default or 1
+    export.prompting = true
+    mp.set_property_bool("pause", true)
+    clear_overlay()
+    hide_osc(true)
+    local n = #spec.choices
+    local function pick(i) return function() close_modal(); spec.done(i) end end
+    local function bind(key, fn)
+        local name = "shot_modal_" .. key
+        mp.add_forced_key_binding(key, name, fn)
+        modal_keys[#modal_keys + 1] = name
+    end
+    local function move(step) return function() modal.sel = (modal.sel - 1 + step) % n + 1; draw_modal() end end
+    for i, ch in ipairs(spec.choices) do
+        for _, key in ipairs(ch.keys or {}) do bind(key, pick(i)) end
+    end
+    for _, key in ipairs({"ESC", "q", "Q", "CLOSE_WIN", "Meta+q", "Meta+w", "Ctrl+w"}) do
+        bind(key, pick(spec.cancel or n))
+    end
+    bind("ENTER", function() local i = modal.sel; close_modal(); spec.done(i) end)
+    bind("KP_ENTER", function() local i = modal.sel; close_modal(); spec.done(i) end)
+    bind("LEFT", move(-1)); bind("RIGHT", move(1)); bind("TAB", move(1)); bind("Shift+TAB", move(-1))
+    bind("MBTN_LEFT", function()
+        local m = mp.get_property_native("mouse-pos")
+        for i, r in ipairs(modal.rects) do
+            if m and m.x >= r[1] and m.x <= r[3] and m.y >= r[2] and m.y <= r[4] then close_modal(); spec.done(i); return end
+        end
+    end)
+    bind("MBTN_LEFT_DBL", function() end)
+    draw_modal()
 end
 
 local choose   -- set below
 
-local function close_prompt()
-    export.prompting = false
-    prompt_overlay:remove()
-    for _, name in ipairs(prompt_keys) do mp.remove_key_binding(name) end
-    prompt_keys = {}
-    hide_osc(false)
+local function open_prompt()
+    local moved, made, edits = 0, 0, 0
+    for _, e in ipairs(session.journal) do
+        if e.create then made = made + 1 elseif e.xml_edit then edits = edits + 1 else moved = moved + 1 end
+    end
+    local what = {}
+    if moved > 0 then what[#what + 1] = moved .. (moved == 1 and " file move" or " file moves") end
+    if made > 0 then what[#what + 1] = made .. (made == 1 and " approved copy" or " approved copies") end
+    if edits > 0 then what[#what + 1] = "XML regenerated" end
+    open_modal({
+        title = "Save changes?", title_fs = 96,
+        lines = {table.concat(what, ", ") .. " this session.  Yes keeps them and renders the video.  " ..
+                 "No puts everything back as it was when opened."},
+        choices = {{label = "Yes", keys = {"y", "Y"}}, {label = "No", keys = {"n", "N"}},
+                   {label = "Cancel", keys = {"c", "C"}}},
+        default = 2, cancel = 3,
+        hint = "Y  yes   ·   N  no   ·   C or Esc  cancel   ·   ← →  then Enter",
+        done = function(i) choose(i) end,
+    })
 end
 
-local function open_prompt()
-    export.prompting = true
-    prompt.sel = 2                    -- No
-    mp.set_property_bool("pause", true)
-    clear_overlay()
-    hide_osc(true)
-    local function bind(key, fn)
-        local name = "shot_prompt_" .. key
-        mp.add_forced_key_binding(key, name, fn)
-        prompt_keys[#prompt_keys + 1] = name
+show_validation = function(asm)
+    local iss = asm.issues
+    local lines = {}
+    for _, l in ipairs(iss.fixable) do lines[#lines + 1] = l end
+    for _, l in ipairs(iss.notes) do lines[#lines + 1] = "note: " .. l end
+    local more = #lines - 10
+    if more > 0 then
+        for i = #lines, 11, -1 do table.remove(lines, i) end
+        lines[#lines + 1] = string.format("… and %d more (see the mpv log)", more)
     end
-    local function move(step) return function() prompt.sel = (prompt.sel - 1 + step) % 3 + 1; draw_prompt() end end
-    bind("y", function() choose(1) end); bind("Y", function() choose(1) end)
-    bind("n", function() choose(2) end); bind("N", function() choose(2) end)
-    for _, key in ipairs({"c", "C", "ESC", "q", "Q", "CLOSE_WIN", "Meta+q", "Meta+w", "Ctrl+w"}) do
-        bind(key, function() choose(3) end)
-    end
-    bind("ENTER", function() choose(prompt.sel) end); bind("KP_ENTER", function() choose(prompt.sel) end)
-    bind("LEFT", move(-1)); bind("RIGHT", move(1)); bind("TAB", move(1)); bind("Shift+TAB", move(-1))
-    bind("MBTN_LEFT", function()
-        local m = mp.get_property_native("mouse-pos")
-        for i, r in ipairs(prompt.rects) do
-            if m and m.x >= r[1] and m.x <= r[3] and m.y >= r[2] and m.y <= r[4] then choose(i); return end
-        end
-    end)
-    bind("MBTN_LEFT_DBL", function() end)
-    draw_prompt()
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "Regenerate points every shot at its latest version (newest file in the highest rung)."
+    lines[#lines + 1] = "Timing, soundtrack and other slots stay.  Answering No when you quit undoes it."
+    open_modal({
+        title = "This XML doesn't match the folders", title_fs = 64, button_w = 300,
+        lines = lines,
+        choices = {{label = "Regenerate XML", keys = {"r", "R", "g", "G"}}, {label = "Ignore", keys = {"i", "I"}}},
+        default = 2, cancel = 2,
+        hint = "R  regenerate   ·   I or Esc  ignore   ·   ← →  then Enter",
+        done = function(i)
+            if i == 1 then
+                pending_action = {kind = "regen", xml = asm.xml, pos = mp.get_property_number("time-pos") or 0}
+                mp.commandv("loadfile", state.path, "replace")
+            else
+                render(true)
+            end
+        end,
+    })
 end
 
 local function quit_request()
@@ -1996,7 +2202,6 @@ local function quit_request()
 end
 
 choose = function(i)
-    close_prompt()
     if i == 1 then                    -- Yes: keep, render the edit if it changed, quit
         export.choice = "yes"
         if export.dirty and not export.done then

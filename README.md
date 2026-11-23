@@ -177,7 +177,23 @@ Drag an FCP7 `.xml` onto mpv (or open it like any file):
 - A label ending in `MISSING PLATE` draws the number plus a large centred card over a red wash.
 - A clip with no `<comments>` gets no label.
 - A slot playing a fallback after a reject is labelled for what it actually shows (see below).
-- When a rung holds more than one version of the shot (live or retired), a small line above the label says which one is on screen: the run folder's date and its place among them, oldest first, e.g. `11-22 12:42 · 2 of 3`. The numbers stay put as you reject and un-retire. The label itself keeps the `NN stage PP` format.
+- When a rung holds more than one version of the shot (live or retired), a small line above the label says which one is on screen: the file's date and its place among them, oldest first, e.g. `11-21 18:50 · 2 of 3`. The numbers stay put as you reject and un-retire. The label itself keeps the `NN stage PP` format.
+
+### Checking the XML against the folders
+
+The first time an XML is opened in a session, mpv checks it against the files on disk:
+- **Each slot:** its file is missing; it names a file that's been retired or moved and a fallback is playing; it's marked rejected while a version is back; or a newer version of the shot exists. A newer version means the newest live file in the highest rung that has one.
+- **The XML's own structure:** gaps or overlaps between clips, a slot whose length disagrees with its in/out, and a sequence length that doesn't match the clips. These are notes.
+- **The folders:** run folders named on different clocks (their names then don't sort by time). This is a note.
+
+If anything turns up that a regenerate would fix, a card lists it (everything also goes to the mpv log) with two choices:
+
+| Choice | Key | Does |
+|--------|-----|------|
+| **Regenerate XML** | `R` | Point every rung slot at its shot's latest version, with matching labels. Timing, soundtrack and slots outside the rungs stay as they are. |
+| **Ignore** (default) | `I`, `Esc` or `Enter` | Play the XML as it is. |
+
+Regenerating counts as a change: answer **No** when you quit and the XML goes back exactly as it was.
 
 ### Approve, reject, un-retire
 
@@ -211,13 +227,13 @@ shots/
 A shot's file is one named for its shot number: `07.mp4` or `07_v4.mp4`, anywhere inside a rung, in any video format. Drivers (`07_driver.mp4`), comp layers (`07_character.mov`), frames, prompts, audio and the masters in an `uncompressed/` folder don't count.
 
 **Reject walks down.** Reject moves the file on screen to `<its rung>/retired/<same path>`, and the slot plays the next file down:
-1. The newest remaining version of that shot in the same rung. Newest means: highest pass (`v.NNN`), then the latest run folder (they're named by time, like `11-22__1242`), then the highest `_v#`, then the file's modified date. That's the pipeline's own order, so a re-copied old run doesn't count as new.
+1. The newest remaining version of that shot in the same rung, by the file's modified date (when the take was written; copies keep it). Pass numbers and run folder names don't decide the order: passes can be uploaded out of order, and run folders get named on different clocks.
 2. When that rung has none left, the newest one in the next rung down.
 3. And so on, down to `A_`.
 
 Keep pressing `r` and you step back through the shot's history, from candidate, to the latest run, to the older run, to the cleaned plate, to the cropped plate. The label follows: it reads `07 run 00` while a run plays and `07 cleaned plate` on the plate, with the pass number taken from the `v.NNN` folder. Only when nothing at all is left is the slot the dark gray **REJECTED** clip.
 
-**Un-retire walks back up, like a playhead.** Think of a shot's versions as a tape, ordered by rung and then newest as above: `A_` plates at the start, the newest file in the highest rung at the end. What the slot shows is the playhead. Reject rewinds it. Un-retire (the rotate-ccw button or `u`) moves it forward: it takes the retired version of that shot just *above* what's showing, from any rung's `retired/` folder, moves it back to its old folder (recreated if needed), and plays it.
+**Un-retire walks back up, like a playhead.** Think of a shot's versions as a tape, ordered by rung and then by file date: `A_` plates at the start, the newest file in the highest rung at the end. What the slot shows is the playhead. Reject rewinds it. Un-retire (the rotate-ccw button or `u`) moves it forward: it takes the retired version of that shot just *above* what's showing, from any rung's `retired/` folder, moves it back to its old folder (recreated if needed), and plays it.
 
 So you can reject your way down to see every version of a shot, every run and every plate, then press un-retire on repeat. It brings them back earliest first and ends on the latest. Nothing is logged; the folders are the tape:
 - **Any retired file counts,** whether mpv retired it, another tool did, or you moved it by hand.
