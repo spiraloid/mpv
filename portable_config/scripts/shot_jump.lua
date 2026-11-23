@@ -398,6 +398,30 @@ local function rung_label(ri, num_text)
     return (num_text or ri.num) .. " " .. stage .. pass
 end
 
+-- Where a version sits on the tape, oldest to newest, the way the pipeline ranks
+-- them: rung letter, pass (v.NNN), run folder (named by time, "11-22__1242"),
+-- _v# in the file name, then modified time and path as tie-breaks. Retired and
+-- live copies of a file get the same key.
+local function version_key(path, mtime)
+    local ri = rung_info(path)
+    if not ri then return nil end
+    local sub = ri.retired and ri.sub:gsub("^retired/", "", 1) or ri.sub
+    local pass = tonumber(sub:match("v%.(%d+)/") or "") or -1
+    local run = ""
+    local dirs = {}
+    for part in sub:gmatch("([^/]+)/") do dirs[#dirs + 1] = part end
+    for i = #dirs, 1, -1 do if not dirs[i]:match("^v%.%d+$") then run = dirs[i]; break end end
+    local v = tonumber((sub:match("([^/]+)$") or ""):match("^%d+_v(%d+)%.") or "") or 0
+    return {ri.letter, pass, run, v, mtime or 0, slash(live_path(ri))}
+end
+
+local function key_above(a, b)   -- is a later on the tape than b
+    for i = 1, #a do
+        if a[i] ~= b[i] then return a[i] > b[i] end
+    end
+    return false
+end
+
 -- A rung's shot files (recursive, skipping retired/, uncompressed/ and hidden)
 local function rung_files(dir, cache)
     if cache[dir] then return cache[dir] end
@@ -410,7 +434,8 @@ local function rung_files(dir, cache)
                 local p = utils.join_path(d, f)
                 local info = utils.file_info(p)
                 if info and info.is_file then
-                    out[#out + 1] = {path = p, nn = tonumber(num), mtime = info.mtime or 0}
+                    local vk = version_key(p, info.mtime)
+                    if vk then out[#out + 1] = {path = p, nn = tonumber(num), mtime = info.mtime or 0, vk = vk} end
                 end
             end
         end
@@ -421,6 +446,41 @@ local function rung_files(dir, cache)
     walk(dir, 0)
     cache[dir] = out
     return out
+end
+
+-- Which version of the shot this is within its rung, for the small line over the
+-- label: "11-22 12:42 · 2 of 3". Counts live and retired versions together, oldest
+-- first, so the numbers hold still while reject / un-retire move files around.
+-- nil when the rung has only one version of the shot.
+local function version_detail(ri, play_path, cache)
+    local rung_dir = native_seps(ri.shots .. "/" .. ri.rung)
+    local rows = {}
+    for _, f in ipairs(rung_files(rung_dir, cache)) do
+        if f.nn == ri.nn then rows[#rows + 1] = {key = f.vk[6], mtime = f.mtime, vk = f.vk} end
+    end
+    for _, f in ipairs(rung_files(utils.join_path(rung_dir, "retired"), cache)) do
+        if f.nn == ri.nn then rows[#rows + 1] = {key = f.vk[6], mtime = f.mtime, vk = f.vk} end
+    end
+    if #rows < 2 then return nil end
+    table.sort(rows, function(a, b) return key_above(b.vk, a.vk) end)
+    local here, idx = slash(play_path), nil
+    for i, r in ipairs(rows) do if r.key == here then idx = i end end
+    if not idx then return nil end
+    -- when: the run folder ("11-22__1242" -> "11-22 12:42"), else a _v# name, else the file date
+    local when
+    local dirs = {}
+    for part in ri.sub:gmatch("([^/]+)/") do dirs[#dirs + 1] = part end
+    for i = #dirs, 1, -1 do
+        if not dirs[i]:match("^v%.%d+$") then when = dirs[i]; break end
+    end
+    if when then
+        local mo, da, hh, mi = when:match("^(%d%d)%-(%d%d)__(%d%d)(%d%d)$")
+        if mo then when = string.format("%s-%s %s:%s", mo, da, hh, mi) end
+    else
+        local vtag = (ri.sub:match("([^/]+)$") or ""):match("^%d+(_v%d+)%.")
+        when = vtag and vtag:sub(2) or os.date("%m-%d %H:%M", rows[idx].mtime)
+    end
+    return string.format("%s · %d of %d", when, idx, #rows)
 end
 
 -- The newest live file for ri's shot in ri's rung, else the next rung down, to A
@@ -434,7 +494,7 @@ local function walk_down(ri, cache)
     for _, r in ipairs(rungs) do
         local best
         for _, f in ipairs(rung_files(utils.join_path(shots, r), cache)) do
-            if f.nn == ri.nn and (not best or f.mtime > best.mtime) then best = f end
+            if f.nn == ri.nn and (not best or key_above(f.vk, best.vk)) then best = f end
         end
         if best then return best.path end
     end
@@ -460,20 +520,12 @@ local function resolve_source(path, enabled, cache)
 end
 
 -- ── the playhead: reject rewinds, un-retire goes forward ─────────────────────
--- A shot's versions sit on a tape ordered by (rung letter, modified time, path):
--- higher rung is later, newer file is later. Reject retires what's showing and
+-- A shot's versions sit on a tape ordered by version_key: higher rung is later,
+-- then higher pass, later run folder, higher _v#, newer file. Reject retires what's showing and
 -- the slot drops to the next live file down (walk_down). Un-retire brings back
 -- the retired file closest *above* what's showing, so pressing it on repeat
 -- climbs back to the latest. No log: whatever sits in a <rung>/retired/ folder
 -- counts, whoever moved it there. Moves keep modified times, so the order holds.
-
-local function tape_key(letter, mtime, path) return {letter, mtime or 0, slash(path)} end
-
-local function key_above(a, b)   -- is a later on the tape than b
-    if a[1] ~= b[1] then return a[1] > b[1] end
-    if a[2] ~= b[2] then return a[2] > b[2] end
-    return a[3] > b[3]
-end
 
 -- The retired version of shot nn just above play_path (nil play_path: below
 -- everything, as on a REJECTED slot) whose old place is free.
@@ -481,9 +533,8 @@ end
 local function next_up(shots, nn, play_path, cache)
     local here
     if play_path then
-        local pri = rung_info(play_path)
         local info = utils.file_info(play_path)
-        if pri and info then here = tape_key(pri.letter, info.mtime, live_path(pri)) end
+        here = info and version_key(play_path, info.mtime)
     end
     local best, best_key
     local sdir = native_seps(shots)
@@ -494,7 +545,7 @@ local function next_up(shots, nn, play_path, cache)
                     local fri = rung_info(f.path)
                     local orig = fri and live_path(fri)
                     if orig and not exists(orig) then
-                        local k = tape_key(fri.letter, f.mtime, orig)
+                        local k = f.vk
                         if (not here or key_above(k, here)) and (not best_key or key_above(best_key, k)) then
                             best, best_key = {ret_path = f.path, orig_path = orig}, k
                         end
@@ -550,6 +601,8 @@ local function build_assembly(xml_path, seq)
             shots[#shots + 1] = {t = t, len = len, idx = i, name = c.name, retired = rejected,
                                  missing = is_missing, play = c.resolved,
                                  label = label, label_color = label_color, num_text = num_text,
+                                 detail = ri and not rejected and not is_missing and not ri.retired
+                                          and version_detail(ri, c.resolved, cache) or nil,
                                  refs = refs, rung = ri,
                                  undo = ri and next_up(ri.shots, ri.nn,
                                                        (not rejected and not is_missing) and c.resolved or nil, cache) or nil,
@@ -1179,6 +1232,7 @@ local L = {
     sx_big = 130, sx_small = 113,    -- \fscx: Hershey is wider than a sans
     descent = 0.17,                  -- \an3 anchors the box bottom: baseline + descent*fs_big
     border = 2,
+    detail_gap = 26,                 -- detail line's baseline sits this far above the label's
     card_fs = 133,                   -- MISSING PLATE card, 81px cap (cap is ~0.607 x fs here)
 }
 local B = {right = 51, top = 44, size = 64, icon = 32, gap = 16,   -- round icon buttons
@@ -1268,6 +1322,13 @@ local function label_events(events, shot, vx0, vy0, vw, vh, k)
         line = line .. string.format("{\\fs%.1f\\fscx%d}%s", L.fs_small * k, L.sx_small, ass_text(rest))
     end
     events[#events + 1] = line
+    -- which version this is, small, over the label (the label itself keeps the
+    -- burn-in format "NN stage PP" that reviewers and OCR read)
+    if shot.detail and not missing then
+        local yd = vy0 + vh - (L.baseline + L.detail_gap - L.descent * L.fs_small) * k
+        events[#events + 1] = string.format("{\\an3\\pos(%.1f,%.1f)%s\\1c&H%s&\\fs%.1f\\fscx%d}%s",
+            x, yd, style, COLORS.white, L.fs_small * k, L.sx_small, ass_text(shot.detail))
+    end
 end
 
 -- Lucide icons (lucide.dev, lucide-static 0.460.0, ISC license): 24x24 grid,
