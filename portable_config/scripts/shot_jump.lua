@@ -305,6 +305,11 @@ local state = {}            -- per loaded file: path, shots, fps, assembly
 local pending_assembly      -- built in on_load, claimed on file-loaded
 local pending_action        -- reject / restore, carried out in on_load
 local export = {dirty = false}  -- assembly changed this session: render it on exit
+-- Everything this mpv session did on disk, so "No" on exit can put it back:
+-- snap[xml] = the XML's text (and whether a .bak existed) when first opened;
+-- journal = moves {from, to} and created files {create}, in order.
+local session = {snap = {}, journal = {}}
+local function journal_move(from, to) session.journal[#session.journal + 1] = {from = from, to = to} end
 local encoding = (mp.get_property("o") or "") ~= ""   -- running as the exporter itself
 local add_burn_in, bind_quit_keys   -- defined with the export code below
 local scan                  -- running scan: path, token, log, offset, buf, cuts
@@ -776,6 +781,7 @@ local function do_retire(p)
         if not mkdir_p(dir_of(dest)) or not move_file(p.path, dest) then
             osd("reject failed: could not move " .. name_of(p.path), 3); return
         end
+        journal_move(p.path, dest)
         local old_dir = dir_of(p.path)
         if slash(old_dir) ~= ri.shots .. "/" .. ri.rung then remove_empty_dir(old_dir) end
         local next_src = walk_down(ri, {})
@@ -803,6 +809,7 @@ local function do_retire(p)
     if not move_file(p.path, dest) then
         osd("reject failed: could not move " .. name_of(p.path), 3); return
     end
+    journal_move(p.path, dest)
     local text = read_file(p.xml)
     if not text then osd("moved, but could not read the XML", 3); return end
     local bak = p.xml .. ".bak"
@@ -829,6 +836,7 @@ local function do_restore(p)
         if not mkdir_p(dir_of(e.orig_path)) or not move_file(e.ret_path, e.orig_path) then
             osd("un-retire failed: could not move " .. name_of(e.ret_path) .. " back", 3); return
         end
+        journal_move(e.ret_path, e.orig_path)
         -- take out the folders under <rung>/retired (and retired/ itself) left empty
         local ri = rung_info(e.ret_path)
         local top = ri and (ri.shots .. "/" .. ri.rung .. "/retired")
@@ -854,6 +862,7 @@ local function do_restore(p)
         if exists(p.orig) or not mkdir_p(dir_of(p.orig)) or not move_file(p.path, p.orig) then
             osd("restore failed: could not move " .. name_of(p.path) .. " back", 3); return
         end
+        journal_move(p.path, p.orig)
         -- take out the folders under retired/ (and retired/ itself) that are now empty
         local dir = dir_of(p.path)
         while dir:gsub("\\", "/"):find("/" .. o.retired_dir .. "/", 1, true) or
@@ -883,6 +892,9 @@ mp.add_hook("on_load", 50, function()
     local text = read_file(xml_path)
     if not text or not text:find("<xmeml", 1, true) then return end
 
+    if not session.snap[xml_path] then
+        session.snap[xml_path] = {text = text, bak = exists(xml_path .. ".bak")}
+    end
     local action = pending_action
     pending_action = nil
     if action and action.xml == xml_path then
@@ -1238,7 +1250,7 @@ local L = {
 local B = {right = 51, top = 44, size = 64, icon = 32, gap = 16,   -- round icon buttons
            rejected_fs = 220}                                      -- REJECTED card text
 local COLORS = {white = "FFFFFF", gray = "808080", orange = "00A5FF"}  -- ASS is BGR
-local BUTTON_COLORS = {approve = "4F9E2E", reject = "1E1ED0", off = "6E6E6E"}
+local BUTTON_COLORS = {approve = "4F9E2E", reject = "1E1ED0", restore = "7A7A7A", off = "6E6E6E"}
 
 local overlay = mp.create_osd_overlay("ass-events")
 local overlay_key
@@ -1265,7 +1277,7 @@ end
 local function shot_buttons(shot)
     local asm = state.assembly
     if not shot or not asm or asm.generated then return nil end
-    local undo_btn = {name = "restore", icon = "rotate-ccw", color = BUTTON_COLORS.approve, enabled = true}
+    local undo_btn = {name = "restore", icon = "rotate-ccw", color = BUTTON_COLORS.restore, enabled = true}
     local reject_off = {name = "reject", icon = "thumbs-down", color = BUTTON_COLORS.off, enabled = false, dim = true}
     if asm.review_layout then
         local ri = shot.rung
@@ -1450,7 +1462,7 @@ local function clear_overlay()
 end
 
 local function render(force)
-    if export.running then clear_overlay(); return end
+    if export.running or export.prompting then clear_overlay(); return end
     local i = state.assembly and current_shot_index()
     local shot = i and state.shots[i]
     local d = mp.get_property_native("osd-dimensions")
@@ -1582,7 +1594,10 @@ end
 local approve_job   -- {src, part, final} while a copy runs
 
 local function finish_approve_copy(job)
-    if exists(job.part) and not exists(job.final) and os.rename(job.part, job.final) then return true end
+    if exists(job.part) and not exists(job.final) and os.rename(job.part, job.final) then
+        session.journal[#session.journal + 1] = {create = job.final}
+        return true
+    end
     os.remove(job.part)
     return false
 end
@@ -1840,6 +1855,134 @@ local function run_export(done)
         end)
 end
 
+-- ── exit prompt: Save changes? Yes / No / Cancel ──────────────────────────────
+
+-- Put the disk back the way it was when the XMLs were first opened: undo every
+-- move and copy in reverse, then restore each XML (and drop a .bak this session
+-- made). Runs at shutdown, after mpv has let go of the files.
+local function revert_session()
+    local undone, failed = 0, 0
+    for i = #session.journal, 1, -1 do
+        local e = session.journal[i]
+        if e.create then
+            if os.remove(e.create) then undone = undone + 1 else failed = failed + 1 end
+        elseif exists(e.to) and not exists(e.from) then
+            if mkdir_p(dir_of(e.from)) and move_file(e.to, e.from) then
+                undone = undone + 1
+                -- tidy the folder the file left: retired/ subfolders, or a run folder
+                local dir = dir_of(e.to)
+                local ri = rung_info(e.to)
+                if slash(dir):find("/retired/", 1, true) or name_of(dir) == "retired" then
+                    while true do
+                        remove_empty_dir(dir)
+                        if exists(dir) or name_of(dir) == "retired" then break end
+                        dir = dir_of(dir)
+                    end
+                elseif ri and slash(dir) ~= ri.shots .. "/" .. ri.rung then
+                    remove_empty_dir(dir)
+                end
+            else
+                failed = failed + 1
+                msg.error("could not move back " .. e.to .. " -> " .. e.from)
+            end
+        else
+            failed = failed + 1
+            msg.error("could not move back (missing or blocked) " .. e.to .. " -> " .. e.from)
+        end
+    end
+    for xml, snap in pairs(session.snap) do
+        if read_file(xml) ~= snap.text then write_file(xml, snap.text) end
+        if not snap.bak then os.remove(xml .. ".bak") end
+    end
+    session.journal = {}
+    msg.info(string.format("put back %d change(s)%s", undone, failed > 0 and (", " .. failed .. " failed") or ""))
+end
+
+local prompt = {sel = 2, rects = {}}
+local prompt_overlay = mp.create_osd_overlay("ass-events")
+prompt_overlay.z = 900
+local CHOICES = {"Yes", "No", "Cancel"}
+local prompt_keys = {}
+
+local function draw_prompt()
+    local d = mp.get_property_native("osd-dimensions") or {w = 1920, h = 1080}
+    local w, h = d.w or 1920, d.h or 1080
+    local k = h / 1080
+    local moved, made = 0, 0
+    for _, e in ipairs(session.journal) do if e.create then made = made + 1 else moved = moved + 1 end end
+    local what = {}
+    if moved > 0 then what[#what + 1] = moved .. (moved == 1 and " file move" or " file moves") end
+    if made > 0 then what[#what + 1] = made .. (made == 1 and " approved copy" or " approved copies") end
+    local ev = {
+        string.format("{\\an7\\pos(0,0)\\p1\\bord0\\shad0\\1c&H000000&\\1a&H30&}m 0 0 l %d 0 %d %d 0 %d{\\p0}", w, w, h, h),
+        string.format("{\\an5\\pos(%.1f,%.1f)\\bord0\\shad0\\b1\\q2\\1c&HFFFFFF&\\1a&H00&\\fs%.1f}Save changes?",
+            w / 2, h / 2 - 130 * k, 96 * k),
+        string.format("{\\an5\\pos(%.1f,%.1f)\\bord0\\shad0\\q2\\1c&HC0C0C0&\\1a&H00&\\fs%.1f}%s this session.  " ..
+            "Yes keeps them and renders the video.  No puts everything back as it was when opened.",
+            w / 2, h / 2 - 50 * k, 26 * k, ass_text(table.concat(what, ", ")))
+    }
+    local bw, bh, gap = 240 * k, 84 * k, 36 * k
+    local x = w / 2 - (3 * bw + 2 * gap) / 2
+    local y = h / 2 + 20 * k
+    prompt.rects = {}
+    for i, label in ipairs(CHOICES) do
+        local sel = i == prompt.sel
+        ev[#ev + 1] = string.format(
+            "{\\an7\\pos(0,0)\\p1\\bord%.2f\\shad0\\1c&H%s&\\1a&H%s&\\3c&HFFFFFF&\\3a&H%s&}m %.0f %.0f l %.0f %.0f %.0f %.0f %.0f %.0f{\\p0}",
+            2 * k, sel and "FFFFFF" or "3A3A3A", sel and "00" or "30", sel and "00" or "90",
+            x, y, x + bw, y, x + bw, y + bh, x, y + bh)
+        ev[#ev + 1] = string.format("{\\an5\\pos(%.1f,%.1f)\\bord0\\shad0\\b1\\q2\\1c&H%s&\\1a&H00&\\fs%.1f}%s",
+            x + bw / 2, y + bh / 2, sel and "000000" or "FFFFFF", 40 * k, label)
+        prompt.rects[i] = {x, y, x + bw, y + bh}
+        x = x + bw + gap
+    end
+    ev[#ev + 1] = string.format("{\\an5\\pos(%.1f,%.1f)\\bord0\\shad0\\q2\\1c&H909090&\\1a&H00&\\fs%.1f}" ..
+        "Y  yes   ·   N  no   ·   C or Esc  cancel   ·   ← →  then Enter",
+        w / 2, y + bh + 50 * k, 24 * k)
+    prompt_overlay.res_x, prompt_overlay.res_y = w, h
+    prompt_overlay.data = table.concat(ev, "\n")
+    prompt_overlay:update()
+end
+
+local choose   -- set below
+
+local function close_prompt()
+    export.prompting = false
+    prompt_overlay:remove()
+    for _, name in ipairs(prompt_keys) do mp.remove_key_binding(name) end
+    prompt_keys = {}
+    hide_osc(false)
+end
+
+local function open_prompt()
+    export.prompting = true
+    prompt.sel = 2                    -- No
+    mp.set_property_bool("pause", true)
+    clear_overlay()
+    hide_osc(true)
+    local function bind(key, fn)
+        local name = "shot_prompt_" .. key
+        mp.add_forced_key_binding(key, name, fn)
+        prompt_keys[#prompt_keys + 1] = name
+    end
+    local function move(step) return function() prompt.sel = (prompt.sel - 1 + step) % 3 + 1; draw_prompt() end end
+    bind("y", function() choose(1) end); bind("Y", function() choose(1) end)
+    bind("n", function() choose(2) end); bind("N", function() choose(2) end)
+    for _, key in ipairs({"c", "C", "ESC", "q", "Q", "CLOSE_WIN", "Meta+q", "Meta+w", "Ctrl+w"}) do
+        bind(key, function() choose(3) end)
+    end
+    bind("ENTER", function() choose(prompt.sel) end); bind("KP_ENTER", function() choose(prompt.sel) end)
+    bind("LEFT", move(-1)); bind("RIGHT", move(1)); bind("TAB", move(1)); bind("Shift+TAB", move(-1))
+    bind("MBTN_LEFT", function()
+        local m = mp.get_property_native("mouse-pos")
+        for i, r in ipairs(prompt.rects) do
+            if m and m.x >= r[1] and m.x <= r[3] and m.y >= r[2] and m.y <= r[4] then choose(i); return end
+        end
+    end)
+    bind("MBTN_LEFT_DBL", function() end)
+    draw_prompt()
+end
+
 local function quit_request()
     if export.running then           -- second quit while saving: skip the video
         export.skip = true
@@ -1847,15 +1990,29 @@ local function quit_request()
         mp.command("quit")
         return
     end
+    if export.prompting then return end
     if pending_action then mp.add_timeout(0.2, quit_request); return end  -- let it land first
-    if export.dirty and not export.done and not export.skip then
-        run_export(function() mp.command("quit") end)
-    else
+    if #session.journal > 0 and not encoding then open_prompt() else mp.command("quit") end
+end
+
+choose = function(i)
+    close_prompt()
+    if i == 1 then                    -- Yes: keep, render the edit if it changed, quit
+        export.choice = "yes"
+        if export.dirty and not export.done then
+            run_export(function() mp.command("quit") end)
+        else
+            mp.command("quit")
+        end
+    elseif i == 2 then                -- No: put everything back at shutdown, quit
+        export.choice = "no"
         mp.command("quit")
+    else                              -- Cancel: back to the player as it was
+        render(true)
     end
 end
 
-local quit_keys = {"ESC", "q", "Q", "CLOSE_WIN"}
+local quit_keys = {"ESC", "q", "Q", "CLOSE_WIN", "Meta+q", "Meta+w", "Ctrl+w"}
 local quit_bound = false
 bind_quit_keys = function(on)
     if on == quit_bound or encoding then return end
@@ -1879,40 +2036,22 @@ mp.register_event("shutdown", function()
         if action.kind == "reject" then do_retire(action) else do_restore(action) end
         if action.notice then export.dirty, export.xml = true, action.xml end
     end
-    -- quit some other way (menu, signal) with unsaved changes: render it now
-    -- Detached, so a stalled render (cloud drive fetch) can't hold mpv open; the
-    -- wrapper renames the finished file into place.
-    if export.dirty and not export.done and not export.skip and not encoding then
-        if export.running then mp.abort_async_command(export.running); export.running = nil end
-        local target = export_target(export.xml)
-        local tmp = export_tmp(target)
-        os.remove(tmp)
-        local args = export_args(export.xml, tmp)
-        if is_windows then
-            local quoted = {}
-            for _, a in ipairs(args) do quoted[#quoted + 1] = ps_quote(a) end
-            utils.subprocess_detached({args = {"powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command",
-                "& " .. table.concat(quoted, " ") .. "; if ($LASTEXITCODE -eq 0) { Move-Item -Force -LiteralPath " ..
-                ps_quote(tmp) .. " -Destination " .. ps_quote(target) .. " } else { Remove-Item -LiteralPath " ..
-                ps_quote(tmp) .. " -ErrorAction SilentlyContinue }"}})
-        else
-            local sh = {"sh", "-c", 'tmp="$1"; out="$2"; shift 2; if "$@"; then mv -f "$tmp" "$out"; else rm -f "$tmp"; fi',
-                        "sh", tmp, target}
-            for _, a in ipairs(args) do sh[#sh + 1] = a end
-            utils.subprocess_detached({args = sh})
-        end
-        msg.info("exporting " .. target .. " in the background")
-    end
+    -- Anything but Yes puts the disk back: No, or a quit that never showed the
+    -- prompt (the default is No, so nothing is overwritten by accident).
+    local keep = export.choice == "yes" or encoding
     local job = approve_job
     if job and not job.finished then
         job.finished = true
         mp.abort_async_command(job.token)
         os.remove(job.part)
-        local r = utils.subprocess({args = job.args, cancellable = false, playback_only = false})
-        if r.status == 0 and finish_approve_copy(job) then
-            msg.info("approved " .. job.src .. " -> " .. job.final .. " (finished at exit)")
-        else
-            os.remove(job.part)
+        if keep then
+            local r = utils.subprocess({args = job.args, cancellable = false, playback_only = false})
+            if r.status == 0 and finish_approve_copy(job) then
+                msg.info("approved " .. job.src .. " -> " .. job.final .. " (finished at exit)")
+            else
+                os.remove(job.part)
+            end
         end
     end
+    if not keep and #session.journal > 0 then revert_session() end
 end)

@@ -58,7 +58,7 @@ Do this once per file type for `.jpg`, `.jpeg`, `.png`, `.mp4`, `.mp3`, `.wav`:
 2. The config is in place: `shot_jump.lua` is in `%APPDATA%\mpv\scripts\` (winget) or `portable_config\scripts\` (portable).
 3. Open a video with a few cuts. Within a few seconds an `.xml` with the same name appears beside it, and `LEFT` / `RIGHT` jump cut to cut.
 4. Open an FCP7 `.xml` (drag it onto mpv). It plays as one edit with shot labels bottom-right. Arrows and the mouse wheel step shot to shot.
-5. Pause on a clip from a rung folder (e.g. `shots/I_candidates/`). Thumbs up / down buttons appear top-right. To try it safely, press thumbs down: the slot drops to the next file down the rungs. Then press the un-retire arrow: the clip comes straight back. Thumbs up copies the clip into `shots/K_final/` for real. Quitting after a reject renders a fresh `<xml name>.mp4`, so try this on a copy of the edit if the current video matters.
+5. Pause on a clip from a rung folder (e.g. `shots/I_candidates/`). Thumbs up / down buttons appear top-right. To try it safely, press thumbs down: the slot drops to the next file down the rungs. Then press the un-retire arrow: the clip comes straight back. Thumbs up copies the clip into `shots/K_final/`. Quit with `Esc` and answer **No** at the Save changes? prompt, and every file goes back where it was.
 6. Middle click drops to a quarter-size window top-left; middle click again returns to fullscreen.
 7. Press `h` for every key.
 
@@ -105,7 +105,7 @@ The playlist auto-filters to the same media type as the starting file (video / i
 | `o` | Show / hide the shot label and buttons (outside an XML assembly: mpv's progress bar) |
 | `,` / `.` | Frame back / forward (mpv defaults) |
 
-`a`, `r`, `u` and `o` work while an FCP7 XML is playing as an assembly (see [Shot review](#shot-review) below). Quitting after a change saves the XML and renders a fresh video of the edit first.
+`a`, `r`, `u` and `o` work while an FCP7 XML is playing as an assembly (see [Shot review](#shot-review) below). Quitting after a change asks **Save changes?**: Yes keeps it and renders a fresh video, No (the default) puts everything back, Cancel carries on.
 
 ### Fullscreen
 
@@ -185,7 +185,7 @@ Pause on a clip and round buttons appear top-right of the picture. They hide aga
 
 | Button | Key | Does |
 |--------|-----|------|
-| rotate-ccw | `u` | Un-retire: bring back the next newer retired version. Shown only when there is one |
+| rotate-ccw (gray) | `u` | Un-retire: bring back the next newer retired version. Shown only when there is one |
 | thumbs-up | `a` | Approve: copy the clip to the finals. Solid with a filled thumb once the shot has a final |
 | thumbs-down | `r` | Reject: move the clip into a `retired/` folder. Grayed out when nothing is left to reject |
 
@@ -231,18 +231,25 @@ So you can reject your way down to see every version of a shot, every run and ev
 
 **Other XMLs.** Clips that aren't in a rung layout have no Approve and no walk. Reject moves the clip to `retired/<its path relative to the XML>` beside the XML (or `retired/<file name>` from outside its folder), and the slot plays as REJECTED until you un-retire it.
 
-### Saving: the XML, then a fresh video
+### Quitting: Save changes? Yes / No / Cancel
 
-Every approve, reject and un-retire is written to the XML straight away. Rejects and un-retires point its clipitem's `pathurl` at the file now playing, and give the label (`<mastercomment1>`) the stage of that file. The first change also saves the XML's original as `<name>.xml.bak`.
+Every approve, reject and un-retire happens on disk right away, so you see the result as you go. The file moves, the approved copy, and the XML pointing its clipitem's `pathurl` and label (`<mastercomment1>`) at the file now playing. When mpv first opens an XML it remembers how the XML read and logs every move and copy it makes after that.
 
-When you quit after changing an assembly, mpv first finishes any action still in flight and saves the XML. Then it renders a new video of the whole edit beside it, with the XML's name (`daily.xml` → `daily.mp4`), replacing the old one, and only quits once that's done. A full-frame **SAVING…** card covers the picture while it renders, with the file name and a seconds counter.
+Quit (`Esc`, `q`, window close, Cmd+Q) after changing anything and a full-frame prompt asks **Save changes?**
+
+| Choice | Key | What happens |
+|--------|-----|--------------|
+| **Yes** | `Y` | Keep everything. If the edit changed, render a fresh video of it (below), then quit. |
+| **No** (default) | `N` or `Enter` | Put everything back as it was when the XML was opened: every moved file returns, approved copies are deleted, the XML is restored exactly (and a `.bak` made this session is removed). The video is left alone. Quit. |
+| **Cancel** | `C` or `Esc` | Close the prompt and carry on, right where you were. |
+
+The arrow keys and `Tab` move the highlight, and `Enter` takes it. You can also click a button. A quit that never shows the prompt (a crash aside) counts as **No**, so nothing is overwritten by accident. Quitting without having changed anything just quits.
+
+**The video (Yes only).** mpv renders the whole edit beside the XML with the XML's name (`daily.xml` → `daily.mp4`), replacing the old one, and quits once that's done. A full-frame **SAVING…** card covers the picture meanwhile, with the file name and a seconds counter.
 - **Encode:** H.264 High at CRF 18 with bt709 colour tags, at the edit's frame rate with every frame present (a short source holds its last frame), plus AAC at 48 kHz with the soundtrack's channels.
 - **Burned in:** the shot labels and any REJECTED / MISSING cards, positioned as on screen.
 - **Writing:** the render goes to a hidden temp file and is renamed over the old video only when it's complete.
 - **Skipping:** quit again while it renders to skip the video and leave the old one untouched.
-- **Quitting another way** (menu, window close on some systems) still renders it, in the background after mpv has gone.
-
-Quitting without having changed anything just quits.
 
 ## Scripts
 
