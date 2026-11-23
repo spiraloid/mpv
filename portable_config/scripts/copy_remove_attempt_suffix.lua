@@ -599,7 +599,7 @@ Space          - Images: next image  |  Video/Audio: pause/play
 Left/Right     - Prev/next shot (frame step when no cuts known)
 a / r / u      - Approve / reject (rewind down the rungs) / un-retire (forward)
 o              - Show/hide shot label + buttons (XML assembly)
-Up/Down        - Navigate playlist
+Up/Down        - Navigate playlist  |  XML: still of the next newer/older version
 ctrl+Left/Right- Shift media group backward/forward
 Wheel          - Videos: pause + frame step  |  Images/Audio: navigate  |  XML: shots
 Alt+Wheel      - Navigate same media type only
@@ -663,8 +663,16 @@ mp.add_key_binding("MBTN_MID",   "toggle_fullscreen_mouse",    function()
     end
 end)
 mp.add_key_binding("ENTER",      "toggle_fullscreen_enter",    function() mp.command("cycle fullscreen") end)
-mp.add_key_binding("UP",         "navigate_prev",              function() navigate_playlist("prev") end)
-mp.add_key_binding("DOWN",       "navigate_next",              function() navigate_playlist("next") end)
+-- XML assembly: Up / Down show a still of the next newer / older version of the
+-- shot on screen (shot_jump.lua)
+mp.add_key_binding("UP",         "navigate_prev",              function()
+    if is_xml_assembly(mp.get_property("path")) then mp.commandv("script-binding", "shot_jump/version_up"); return end
+    navigate_playlist("prev")
+end)
+mp.add_key_binding("DOWN",       "navigate_next",              function()
+    if is_xml_assembly(mp.get_property("path")) then mp.commandv("script-binding", "shot_jump/version_down"); return end
+    navigate_playlist("next")
+end)
 
 -- Wheel input arrives two ways on macOS:
 --  * a notched wheel (e.g. Logitech MX): one event per notch -> one step each, like an arrow

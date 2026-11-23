@@ -87,7 +87,7 @@ The playlist auto-filters to the same media type as the starting file (video / i
 | Key | Action |
 |-----|--------|
 | `SPACE` | Next image · toggle pause (video/audio) |
-| `UP` / `DOWN` | Previous / next playlist item |
+| `UP` / `DOWN` | Previous / next playlist item (XML assembly: still of the next newer / older version of the shot) |
 | `Shift+LEFT` / `Shift+RIGHT` | Seek −5 s / +5 s |
 | `WHEEL_UP` / `WHEEL_DOWN` | Frame back/forward (video) · prev/next item (image/audio) · prev/next shot (XML assembly) |
 | `Alt+WHEEL_UP` / `Alt+WHEEL_DOWN` | Prev / next item of same media type only |
@@ -102,6 +102,7 @@ The playlist auto-filters to the same media type as the starting file (video / i
 | `a` | Approve the clip on screen. On a REJECTED slot, un-retire |
 | `r` | Reject the clip on screen. In a rung layout the slot falls back to the next file down |
 | `u` | Un-retire: bring back the shot's next newer retired version |
+| `UP` / `DOWN` | Still of the next newer / older version of the shot on screen. Play goes back to the edit |
 | `o` | Show / hide the shot label and buttons (outside an XML assembly: mpv's progress bar) |
 | `,` / `.` | Frame back / forward (mpv defaults) |
 
@@ -240,6 +241,8 @@ So you can reject your way down to see every version of a shot, every run and ev
 - **A retired file below the playhead waits.** It comes back in order once you've rewound past it.
 - **A file whose old place is taken is skipped.**
 - **Undo everything** and the folders, the XML and its `.bak` are exactly as they started.
+
+**Look before you move anything: `UP` / `DOWN`.** On a shot in a rung layout, `UP` shows the next newer version of that shot and `DOWN` the next older, on the same tape (rung, then file date), wrapping at either end. It pauses and shows a still of that version's frame at the same point in the shot, with its own label and a small `date · 3 / 5` line over it, so you can flip through every run and plate of the shot without leaving the frame. It's a preview only: nothing moves and the XML is untouched. Playing, stepping a frame or jumping to another shot puts the real edit back, and `a` / `r` / `u` wait until you do (so they never act on a version you're only looking at). The buttons hide while a still is up. Each still takes a moment: a hidden mpv grabs the frame. Every version is taken to start on the shot's first frame; one that runs short shows its last frame.
 
 **Approve** copies the file on screen, from whatever rung it's in, to the finals rung as `K_final/NN.<ext>` (named after the shot number). It refuses if that shot already has a final. Rejecting a final moves it to `K_final/retired/` and the slot drops to the rung below.
 
