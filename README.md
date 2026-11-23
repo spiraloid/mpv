@@ -6,11 +6,15 @@ A portable mpv configuration for Windows and macOS. It's built for reviewing and
 
 **Option A — winget (installed)**
 
+Needs `git` and `winget`. Run in PowerShell:
+
 ```powershell
 winget install -e --id shinchiro.mpv
 git clone https://github.com/spiraloid/mpv.git "$env:USERPROFILE\mpv-config"
 Copy-Item "$env:USERPROFILE\mpv-config\portable_config\*" "$env:APPDATA\mpv\" -Recurse -Force
 ```
+
+If `mpv` isn't found afterwards, open a new PowerShell window so it picks up the new PATH.
 
 To update later, run:
 ```powershell
@@ -47,6 +51,21 @@ Do this once per file type for `.jpg`, `.jpeg`, `.png`, `.mp4`, `.mp3`, `.wav`:
 > ```powershell
 > (Get-Command mpv).Source
 > ```
+
+### Check it works
+
+1. `mpv --version` runs, and `mpv --vf=help` lists `scdet` (the scene-cut filter the shot scan uses).
+2. The config is in place: `shot_jump.lua` is in `%APPDATA%\mpv\scripts\` (winget) or `portable_config\scripts\` (portable).
+3. Open a video with a few cuts. Within a few seconds an `.xml` with the same name appears beside it, and `LEFT` / `RIGHT` jump cut to cut.
+4. Open an FCP7 `.xml` (drag it onto mpv). It plays as one edit with shot labels bottom-right. Arrows and the mouse wheel step shot to shot.
+5. Pause on a clip from `shots/I_candidates/`. Thumbs up / down buttons appear top-right. To try it safely, press thumbs down and then the undo arrow: the clip moves to `retired/` and comes straight back. Thumbs up copies the clip into `shots/K_final/` for real.
+6. Middle click drops to a quarter-size window top-left; middle click again returns to fullscreen.
+7. Press `h` for every key.
+
+If something's off:
+- **A console window flashes when you approve, reject or undo (Windows).** The file moves go through PowerShell, like Rename and Trash.
+- **No cuts found, or no `.xml` written.** Check step 1 for `scdet`. A clip with no cuts gets no `.xml`, by design.
+- **Leftover `mpv_shots_*.log` files in `%TEMP%` (or `$TMPDIR` on macOS) after quitting.** These are scan logs that should have been cleaned up.
 
 ## Workflow
 
