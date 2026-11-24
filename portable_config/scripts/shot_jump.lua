@@ -1404,6 +1404,10 @@ local function label_events(events, shot, vx0, vy0, vw, vh, k)
             vx0 + vw / 2, vy0 + vh / 2, style, COLORS.white, L.card_fs * k)
         rest, color = "", COLORS.white
     end
+    -- playing: only the shot number (and the new badge); the rest of the label
+    -- and the line over it show on pause
+    local paused = mp.get_property_bool("pause")
+    if not paused then rest = "" end
     local x = vx0 + vw - L.right * k
     local y = vy0 + vh - (L.baseline - L.descent * L.fs_big) * k
     local line = string.format("{\\an3\\pos(%.1f,%.1f)%s\\1c&H%s&\\fs%.1f\\fscx%d}%s",
@@ -1414,7 +1418,7 @@ local function label_events(events, shot, vx0, vy0, vw, vh, k)
     events[#events + 1] = line
     -- which version this is, small, over the label (the label itself keeps the
     -- burn-in format "NN stage PP" that reviewers and OCR read)
-    local detail = review_detail and review_detail(shot) or shot.detail
+    local detail = paused and (review_detail and review_detail(shot) or shot.detail) or nil
     if detail and not missing then
         local yd = vy0 + vh - (L.baseline + L.detail_gap - L.descent * L.fs_small) * k
         events[#events + 1] = string.format("{\\an3\\pos(%.1f,%.1f)%s\\1c&H%s&\\fs%.1f\\fscx%d}%s",
@@ -1426,7 +1430,7 @@ local function label_events(events, shot, vx0, vy0, vw, vh, k)
         local size = 34 * k
         local s = size / 24
         local ix = x - size
-        local iy = vy0 + vh - (L.baseline + L.detail_gap + 26) * k - size
+        local iy = vy0 + vh - (L.baseline + (paused and (L.detail_gap + 26) or 30)) * k - size   -- over the line, or the number
         events[#events + 1] = string.format(
             "{\\an7\\pos(0,0)\\p1\\bord%.2f\\shad0\\1a&HFF&\\3c&H000000&\\3a&H50&}%s{\\p0}",
             2.2 * s, B.icon_path("smile-plus", ix, iy, s))
@@ -3197,10 +3201,14 @@ end
 
 function notes.seen_load(r)
     local j = utils.parse_json(read_file(notes.seen_path(r)) or "")
+    -- everything made before the day seen.json was started counts as seen
+    local function day_start(t) local d = os.date("*t", t); d.hour, d.min, d.sec = 0, 0, 0; return os.time(d) end
     if type(j) == "table" and type(j.files) == "table" then
-        r.seen = {since = tonumber(j.since) or 0, files = j.files}
+        local since = tonumber(j.since) or 0
+        r.seen = {since = since > 0 and day_start(since) or 0, files = j.files}
+        if r.seen.since ~= since and not r.preview then notes.seen_write(r) end
     else
-        r.seen = {since = os.time(), files = {}}   -- from now on: what exists already counts as seen
+        r.seen = {since = day_start(os.time()), files = {}}
         if not r.preview then notes.seen_write(r) end
     end
 end
@@ -3211,12 +3219,34 @@ function notes.unseen_scan(r)
     local cache = {}
     for _, shot in ipairs(state.shots or {}) do
         if shot.rung and shot.num and not r.unseen[shot.num] then
+            -- one picture is one version, whichever rungs hold it: a byte copy (a pick,
+            -- a final, a copy back into a lower rung) goes with every file it matches,
+            -- and the group counts as seen if any of them was seen, was picked in a
+            -- review (the choices file names it), or was made before "since".
+            -- Generations only: no plates, nothing retired.
             local u = {}
-            for _, v in ipairs(shot_history(shot_versions(shot.rung.shots, shot.rung.nn, cache), nil)) do
-                -- generations only: no plates, nothing retired (copies are already left out)
+            local rows = shot_versions(shot.rung.shots, shot.rung.nn, cache)
+            local chosen = r.base[shot.num] and slash(r.base[shot.num].file or "") or nil
+            local function seenish(x)
+                local rel = rel_file(r, x.path)
+                return (rel and (r.seen.files[rel] ~= nil or rel == chosen)) or (x.mtime or 0) <= r.seen.since
+            end
+            local gid = 0
+            for _, v in ipairs(rows) do
                 local rel = rel_file(r, v.path)
-                if rel and v.letter >= "C" and not v.retired and r.seen.files[rel] == nil
-                   and (v.mtime or 0) > r.seen.since then u[rel] = true end
+                if rel and v.letter >= "C" and not v.retired and not u[rel] then
+                    local group, any_seen = {v}, seenish(v)
+                    for _, x in ipairs(rows) do
+                        if x ~= v and same_file(x, v) then group[#group + 1] = x; any_seen = any_seen or seenish(x) end
+                    end
+                    if not any_seen then
+                        gid = gid + 1
+                        for _, x in ipairs(group) do
+                            local xr = rel_file(r, x.path)
+                            if xr then u[xr] = gid end
+                        end
+                    end
+                end
             end
             r.unseen[shot.num] = u
         end
@@ -3226,8 +3256,10 @@ end
 B.unseen = function(shot)
     local r = current_review and current_review()
     if not r or not r.unseen or not shot.num then return 0 end
-    local n = 0
-    for _ in pairs(r.unseen[shot.num] or {}) do n = n + 1 end
+    local n, groups = 0, {}
+    for _, g in pairs(r.unseen[shot.num] or {}) do
+        if not groups[g] then groups[g] = true; n = n + 1 end
+    end
     return n
 end
 
@@ -3251,7 +3283,11 @@ function notes.seen_tick()
         -- a slot playing a copy (a final) shows its original: both count as seen
         local play = shot.play and rel_file(r, shot.play)
         if play and play ~= rel and r.seen.files[play] == nil then r.seen.files[play] = r.seen.files[rel] end
-        if r.unseen and r.unseen[shot.num] then r.unseen[shot.num][rel] = nil end
+        local u = r.unseen and r.unseen[shot.num]
+        if u then   -- the picture is seen: every copy of it too
+            local g = u[rel] or (play and u[play])
+            if g then for f, x in pairs(u) do if x == g then u[f] = nil end end end
+        end
         notes.seen_dirty = true
         render(true)
     end
@@ -3259,6 +3295,23 @@ end
 mp.register_event("shutdown", function()
     local r = current_review()
     if r and r.seen and notes.seen_dirty and not r.preview then notes.seen_write(r) end
+end)
+-- script-message unseen-report: each shot's unseen versions, to the log (for checking counts)
+mp.register_script_message("unseen-report", function()
+    local r = current_review()
+    if not r or not r.unseen then msg.info("unseen: no review open"); return end
+    local nums = {}
+    for num in pairs(r.unseen) do nums[#nums + 1] = num end
+    table.sort(nums)
+    for _, num in ipairs(nums) do
+        local files, groups, n = {}, {}, 0
+        for f, g in pairs(r.unseen[num]) do
+            files[#files + 1] = f
+            if not groups[g] then groups[g] = true; n = n + 1 end
+        end
+        table.sort(files)
+        if n > 0 then msg.info(string.format("unseen %s: %d  %s", num, n, table.concat(files, " "))) end
+    end
 end)
 
 function notes.shot_for(num)
