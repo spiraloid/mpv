@@ -1637,9 +1637,32 @@ local function row_events(events, list, vx0, vy0, vw, k)
         local bx = list.box
         local bw, bh, fs = 1000 * k, 50 * k, 28 * k
         local x0, y0 = vx0 + (vw - bw) / 2, y + h + 8 * k
+        B.note_rect = {x0, y0, x0 + bw, y0 + bh}   -- for clicks on the box
         events[#events + 1] = string.format(
             "{\\an7\\pos(0,0)\\p1\\bord%.2f\\shad0\\1c&H000000&\\1a&H40&\\3c&HFFFFFF&\\3a&H90&}m %.1f %.1f l %.1f %.1f %.1f %.1f %.1f %.1f{\\p0}",
             1.5 * k, x0, y0, x0 + bw, y0, x0 + bw, y0 + bh, x0, y0 + bh)
+        if bx.sel then   -- the whole note selected: dark text on a highlight
+            local label_w = (#("Notes for " .. bx.num) + 2) * fs * 0.42
+            local all = bx.before .. bx.after
+            local n = 0
+            for _ in all:gmatch("[%z\1-\127\194-\244][\128-\191]*") do n = n + 1 end
+            local shown = n > 72 and (all:match("^" .. string.rep("[%z\1-\127\194-\244][\128-\191]*", 72)) .. "…") or all
+            local tw = math.min(bw - label_w - 32 * k, math.min(n, 73) * fs * 0.47)
+            local sx = x0 + 16 * k + label_w
+            events[#events + 1] = string.format(
+                "{\\an7\\pos(0,0)\\p1\\bord0\\shad0\\1c&HE0B060&\\1a&H00&}m %.1f %.1f l %.1f %.1f %.1f %.1f %.1f %.1f{\\p0}",
+                sx - 4 * k, y0 + 9 * k, sx + tw + 4 * k, y0 + 9 * k, sx + tw + 4 * k, y0 + bh - 9 * k, sx - 4 * k, y0 + bh - 9 * k)
+            events[#events + 1] = string.format(
+                "{\\an4\\pos(%.1f,%.1f)\\bord0\\shad0\\q2\\1c&H909090&\\1a&H00&\\fs%.1f}%s",
+                x0 + 16 * k, y0 + bh / 2, fs, "Notes for " .. bx.num)
+            events[#events + 1] = string.format(   -- the text where its highlight starts
+                "{\\an4\\pos(%.1f,%.1f)\\bord0\\shad0\\q2\\1c&H000000&\\1a&H00&\\fs%.1f}%s",
+                sx, y0 + bh / 2, fs, esc(shown))
+            events[#events + 1] = string.format(
+                "{\\an8\\pos(%.1f,%.1f)\\bord%.2f\\shad0\\q2\\3c&H000000&\\3a&H50&\\1c&HB0B0B0&\\1a&H00&\\fs%.1f}%s",
+                vx0 + vw / 2, y0 + bh + 6 * k, 1.5 * k, 20 * k, "all selected  ·  type to replace  ·  Cmd/Ctrl+X cuts  ·  Cmd/Ctrl+C copies")
+            return
+        end
         -- keep the cursor in view: show at most ~70 characters before it
         local before = bx.before
         local n = 0
@@ -1654,7 +1677,7 @@ local function row_events(events, list, vx0, vy0, vw, k)
             x0 + 16 * k, y0 + bh / 2, fs, "Notes for " .. bx.num, esc(before), esc(bx.after))
         events[#events + 1] = string.format(
             "{\\an8\\pos(%.1f,%.1f)\\bord%.2f\\shad0\\q2\\3c&H000000&\\3a&H50&\\1c&HB0B0B0&\\1a&H00&\\fs%.1f}%s",
-            vx0 + vw / 2, y0 + bh + 6 * k, 1.5 * k, 20 * k, "Enter saves the note  ·  Esc leaves it as it was")
+            vx0 + vw / 2, y0 + bh + 6 * k, 1.5 * k, 20 * k, "Enter saves the note  ·  Esc leaves it as it was  ·  Cmd/Ctrl+C X V copy, cut, paste")
         return
     end
     if list.note and list.note ~= "" then   -- the shot's note, under the row
@@ -1877,6 +1900,7 @@ local function set_click_binding(on)
     click_bound = on
     if on then
         mp.add_forced_key_binding("MBTN_LEFT", "shot_button_click", function()
+            if B.box_click then return B.box_click() end   -- the note box is open: it takes the click
             local p, h = drag.pointer(), nil   -- where the pointer really is now
             for _, bt in ipairs(buttons) do
                 if bt.enabled and p and p.x >= bt.x0 and p.x <= bt.x1 and p.y >= bt.y0 and p.y <= bt.y1 then h = bt.name end
@@ -2991,6 +3015,7 @@ function notes.close(keep)
     local b = notes.box
     if not b then return end
     notes.box = nil
+    B.note_rect, B.box_click = nil, nil
     for _, name in ipairs(notes.keys) do mp.remove_key_binding(name) end
     notes.keys = {}
     if keep and b.on_keep then
@@ -3014,7 +3039,9 @@ function notes.edit(shot, prefill, on_keep)
     local chars = notes.chars(prefill or notes.of(r, shot.num))
     notes.box = {r = r, num = shot.num, chars = chars, pos = #chars, on_keep = on_keep}
     local b = notes.box
+    local function clear() b.chars, b.pos, b.sel = {}, 0, false end
     local function insert(s)
+        if b.sel then clear() end   -- typing over a selection replaces it
         for _, ch in ipairs(notes.chars(s)) do
             if not ch:match("^%c$") then table.insert(b.chars, b.pos + 1, ch); b.pos = b.pos + 1 end
         end
@@ -3031,18 +3058,58 @@ function notes.edit(shot, prefill, on_keep)
     end
     key("ANY_UNICODE", function(e) insert(e.key_text or "") end, true)
     key("SPACE", function() insert(" ") end)
-    key("BS", function() if b.pos > 0 then table.remove(b.chars, b.pos); b.pos = b.pos - 1 end end)
-    key("DEL", function() if b.pos < #b.chars then table.remove(b.chars, b.pos + 1) end end)
-    key("LEFT", function() b.pos = math.max(0, b.pos - 1) end)
-    key("RIGHT", function() b.pos = math.min(#b.chars, b.pos + 1) end)
-    key("HOME", function() b.pos = 0 end)
-    key("END", function() b.pos = #b.chars end)
-    key("Ctrl+a", function() b.pos = 0 end)
-    key("Ctrl+e", function() b.pos = #b.chars end)
-    key("Ctrl+u", function() b.chars, b.pos = {}, 0 end)
+    key("BS", function()
+        if b.sel then clear() elseif b.pos > 0 then table.remove(b.chars, b.pos); b.pos = b.pos - 1 end
+    end)
+    key("DEL", function()
+        if b.sel then clear() elseif b.pos < #b.chars then table.remove(b.chars, b.pos + 1) end
+    end)
+    key("LEFT", function() b.sel = false; b.pos = math.max(0, b.pos - 1) end)
+    key("RIGHT", function() b.sel = false; b.pos = math.min(#b.chars, b.pos + 1) end)
+    key("HOME", function() b.sel = false; b.pos = 0 end)
+    key("END", function() b.sel = false; b.pos = #b.chars end)
+    key("Ctrl+a", function() b.sel = false; b.pos = 0 end)
+    key("Ctrl+e", function() b.sel = false; b.pos = #b.chars end)
+    key("Ctrl+u", clear)
+    key("Meta+a", function() b.sel = #b.chars > 0 end)
+    -- copy and cut take the whole note (selected or not), so a note moves between shots:
+    -- copy here, n on the other shot, paste
+    for _, k in ipairs({"Ctrl+c", "Meta+c"}) do
+        key(k, function() mp.set_property("clipboard/text", table.concat(b.chars)); osd("note copied", 1) end)
+    end
+    for _, k in ipairs({"Ctrl+x", "Meta+x"}) do
+        key(k, function() mp.set_property("clipboard/text", table.concat(b.chars)); clear(); osd("note cut", 1) end)
+    end
     for _, k in ipairs({"Ctrl+v", "Meta+v"}) do
         key(k, function() insert((mp.get_property("clipboard/text") or ""):gsub("[\r\n]+", " ")) end)
     end
+    -- three clicks on the box select the whole note; a click elsewhere still
+    -- works the state row
+    b.clicks = {}
+    local function click()
+        local now = mp.get_time()
+        local p, r = drag.pointer(), B.note_rect
+        local inside = p and r and p.x >= r[1] and p.x <= r[3] and p.y >= r[2] and p.y <= r[4]
+        if not inside then
+            b.clicks = {}
+            for _, bt in ipairs(buttons) do
+                if bt.enabled and p and p.x >= bt.x0 and p.x <= bt.x1 and p.y >= bt.y0 and p.y <= bt.y1 then
+                    if review_click then review_click(bt.name) end
+                    return
+                end
+            end
+            return
+        end
+        b.clicks[#b.clicks + 1] = now
+        while #b.clicks > 3 do table.remove(b.clicks, 1) end
+        if #b.clicks == 3 and now - b.clicks[1] < 1.0 then b.sel = #b.chars > 0; b.clicks = {} end
+        render(true)
+    end
+    -- the state row's click binding can be re-pushed above this one (when the
+    -- controller hides), so it hands clicks to the box while the box is open
+    B.box_click = click
+    key("MBTN_LEFT", click)
+    key("MBTN_LEFT_DBL", function() end)   -- not fullscreen
     for _, k in ipairs({"UP", "DOWN", "WHEEL_UP", "WHEEL_DOWN", "TAB"}) do key(k, function() end) end
     key("ENTER", function() notes.close(true) end)
     key("KP_ENTER", function() notes.close(true) end)
@@ -3278,7 +3345,7 @@ review_buttons = function(shot)
     local b = notes.box
     if b and b.num == shot.num then
         list.box = {num = b.num, before = table.concat(b.chars, "", 1, b.pos),
-                    after = table.concat(b.chars, "", b.pos + 1, #b.chars), len = #b.chars}
+                    after = table.concat(b.chars, "", b.pos + 1, #b.chars), len = #b.chars, sel = b.sel}
     end
     for _, m in ipairs(MARKS) do
         list[#list + 1] = {name = m.name, text = m.label, color = m.color, star = m.star, lit = cur == m.name}
