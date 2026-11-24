@@ -940,6 +940,10 @@ local function validate(asm, seq, xml_path)
     local fix, notes = {}, {}
     local xml_dir = dir_of(xml_path)
     local cache = {}
+    -- When the XML was last saved: a newer version that already existed then was
+    -- passed over on purpose (an Up / Down pick); only one made since is news
+    local xinfo = utils.file_info(xml_path)
+    local saved_at = xinfo and xinfo.mtime or 0
     local function who(c)
         local l = c.label and xml_unescape(c.label)
         return (l and l:match("^(%d%S*)")) or c.name or "clip"
@@ -981,7 +985,10 @@ local function validate(asm, seq, xml_path)
         if ri and (c.how == "xml" or c.how == "walked") then
             local top = top_version(ri.shots, ri.nn, cache)
             if top and slash(top) ~= slash(c.resolved) then
-                fix[#fix + 1] = string.format("%s: plays %s; latest is %s", who(c), version_text(c.resolved), version_text(top))
+                local tinfo = utils.file_info(top)
+                local line = string.format("%s: plays %s; latest is %s", who(c), version_text(c.resolved), version_text(top))
+                if tinfo and (tinfo.mtime or 0) > saved_at then fix[#fix + 1] = line
+                else notes[#notes + 1] = line .. " (picked over it when the XML was saved)" end
             end
         end
     end

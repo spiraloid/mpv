@@ -183,7 +183,7 @@ Drag an FCP7 `.xml` onto mpv (or open it like any file):
 ### Checking the XML against the folders
 
 The first time an XML is opened in a session, mpv checks it against the files on disk:
-- **Each slot:** its file is missing; it names a file that's been retired or moved and a fallback is playing; it's marked rejected while a version is back; or a newer version of the shot exists. A newer version means the newest live file in the highest rung that has one.
+- **Each slot:** its file is missing; it names a file that's been retired or moved and a fallback is playing; it's marked rejected while a version is back; or a newer version of the shot has appeared since the XML was last saved. A newer version means the newest live file in the highest rung that has one. One that already existed when the XML was saved was passed over on purpose (an `UP` / `DOWN` pick you kept), so it's only a note in the log, not a reason to regenerate.
 - **The XML's own structure:** gaps or overlaps between clips, a slot whose length disagrees with its in/out, and a sequence length that doesn't match the clips. These are notes.
 - **The folders:** run folders named on different clocks (their names then don't sort by time). This is a note.
 
