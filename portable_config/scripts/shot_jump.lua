@@ -1424,7 +1424,7 @@ local function label_events(events, shot, vx0, vy0, vw, vh, k)
         events[#events + 1] = string.format("{\\an3\\pos(%.1f,%.1f)%s\\1c&H%s&\\fs%.1f\\fscx%d}%s",
             x, yd, style, COLORS.white, L.fs_small * k, L.sx_small, ass_text(detail))
     end
-    -- versions of this shot nobody has looked at yet: a green smile-plus over the label
+    -- versions of this shot nobody has looked at yet: a green bell over the label
     local unseen = B.unseen and B.unseen(shot) or 0
     if unseen > 0 and not missing and B.icon_path then
         local size = 34 * k
@@ -1433,10 +1433,10 @@ local function label_events(events, shot, vx0, vy0, vw, vh, k)
         local iy = vy0 + vh - (L.baseline + (paused and (L.detail_gap + 26) or 30)) * k - size   -- over the line, or the number
         events[#events + 1] = string.format(
             "{\\an7\\pos(0,0)\\p1\\bord%.2f\\shad0\\1a&HFF&\\3c&H000000&\\3a&H50&}%s{\\p0}",
-            2.2 * s, B.icon_path("smile-plus", ix, iy, s))
+            2.2 * s, B.icon_path("bell", ix, iy, s))
         events[#events + 1] = string.format(
             "{\\an7\\pos(0,0)\\p1\\bord%.2f\\shad0\\1a&HFF&\\3c&H50C84C&\\3a&H00&}%s{\\p0}",
-            1.1 * s, B.icon_path("smile-plus", ix, iy, s))
+            1.1 * s, B.icon_path("bell", ix, iy, s))
         events[#events + 1] = string.format("{\\an6\\pos(%.1f,%.1f)%s\\1c&H50C84C&\\fs%.1f}%s",
             ix - 8 * k, iy + size / 2, style, L.fs_small * k, unseen == 1 and "1 new" or (unseen .. " new"))
     end
@@ -1498,20 +1498,31 @@ do  -- star: five points, closed, centred on the 24x24 grid
     ICONS["star"] = {pts}
 end
 
-do  -- smile-plus (lucide): a face with a gap at the top right for a plus
-    local arc = {}
-    for i = 0, 46 do
-        local a = math.rad(i * 6)          -- 0 .. 276 degrees, clockwise from the right
-        arc[#arc + 1] = 12 + 10 * math.cos(a)
-        arc[#arc + 1] = 12 + 10 * math.sin(a)
+
+do  -- bell (lucide): the body (a dome on a flared rim) and the clapper under it
+    local body = {3.3, 15.3, 4, 17, 20, 17, 20.7, 15.3}
+    local function bez(x0, y0, x1, y1, x2, y2, x3, y3)   -- a cubic, sampled
+        for i = 1, 6 do
+            local u = i / 6
+            local a, b, c, d = (1 - u) ^ 3, 3 * (1 - u) ^ 2 * u, 3 * (1 - u) * u ^ 2, u ^ 3
+            body[#body + 1] = a * x0 + b * x1 + c * x2 + d * x3
+            body[#body + 1] = a * y0 + b * y1 + c * y2 + d * y3
+        end
     end
-    local smile = {}
-    for i = 0, 8 do
-        local u = i / 8                    -- M8 14 s1.5 2 4 2 4-2 4-2, as one curve
-        smile[#smile + 1] = 8 + 8 * u
-        smile[#smile + 1] = 14 + 2 * math.sin(math.pi * u)
+    bez(20.7, 15.3, 19.4, 13.96, 18, 12.5, 18, 8)          -- the right side up to the dome
+    for i = 1, 12 do                                       -- the dome, over the top
+        local a = math.rad(i * 15)
+        body[#body + 1] = 12 + 6 * math.cos(a)
+        body[#body + 1] = 8 - 6 * math.sin(a)
     end
-    ICONS["smile-plus"] = {arc, smile, {9, 9, 9.2, 9}, {15, 9, 15.2, 9}, {16, 5, 22, 5}, {19, 2, 19, 8}}
+    bez(6, 8, 6, 12.5, 4.6, 13.96, 3.3, 15.3)               -- and down the left side
+    local clapper = {}
+    for i = 0, 6 do                                        -- 150 to 30 degrees, under the rim
+        local a = math.rad(150 - i * 20)
+        clapper[#clapper + 1] = 12 + 2 * math.cos(a)
+        clapper[#clapper + 1] = 20 + 2 * math.sin(a)
+    end
+    ICONS["bell"] = {body, clapper}
 end
 local STAR = {on = "00C8FF", off = "A0A0A0"}   -- ASS is BGR: yellow #FFC800, gray
 
@@ -3179,7 +3190,7 @@ end
 -- <shots>/seen.json ({"since", "files": {path: {"at", "by"}}}, written in place a
 -- few seconds later). Files older than "since" (when the file was first made)
 -- count as seen, so only generations made after it can be new. A shot with
--- versions nobody has seen shows a green smile-plus and "N new" over its label.
+-- versions nobody has seen shows a green bell and "N new" over its label.
 function notes.seen_path(r) return utils.join_path(native_seps(r.shots), "seen.json") end
 
 function notes.seen_write(r)
