@@ -191,7 +191,7 @@ Each press swaps that version into the slot, on the same frame (pressed during p
 | comp | `m` | **Mark for comp**: make a candidate from it |
 | ★ final | `a` | **Mark as final**: the star fills yellow |
 
-Setting a state opens a one-line box, **Notes for NN**, filled with the shot's current note: type what the room said and press `Enter`, or `Esc` to leave the note as it was. `n` opens the same box without changing the state. The note shows under the row and is saved in the shot's `note`. The state and note belong to the version they were set on: step the shot to another version (`UP` / `DOWN`) and both clear, and stepping back doesn't bring them back.
+Setting a state opens a one-line box under the row, **Notes for NN**, filled with the shot's current note: type what the room said and press `Enter`, or `Esc` to leave the note as it was. While it's open every key types (arrows, `Home` / `End` and `Backspace` edit, `Cmd+V` / `Ctrl+V` pastes, `Ctrl+U` empties it), and `UP` / `DOWN` don't change the version. `n` opens the same box without changing the state. The note shows under the row and is saved in the shot's `note`. The state and note belong to the version they were set on: step the shot to another version (`UP` / `DOWN`) and both clear, and stepping back doesn't bring them back.
 
 The project's scripts act on these on save and print the next step for each marked shot (`to reroll: …`); the save card always shows those lines.
 

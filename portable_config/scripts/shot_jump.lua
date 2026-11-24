@@ -1560,10 +1560,37 @@ local function row_events(events, list, vx0, vy0, vw, k)
         buttons[#buttons + 1] = {name = b.name, x0 = x, y0 = hy0, x1 = x + w, y1 = hy1, enabled = true}
         x = x + w
     end
+    local function esc(s)   -- braces would start a tag; a backslash gets a zero-width space after it
+        return (s:gsub("[{}]", "\\%0"):gsub("\\([^{}])", "\\\226\128\139%1"):gsub("\\$", "\\\226\128\139"))
+    end
+    if list.box then   -- the note box, open on this shot
+        local bx = list.box
+        local bw, bh, fs = 1000 * k, 50 * k, 28 * k
+        local x0, y0 = vx0 + (vw - bw) / 2, y + h + 8 * k
+        events[#events + 1] = string.format(
+            "{\\an7\\pos(0,0)\\p1\\bord%.2f\\shad0\\1c&H000000&\\1a&H40&\\3c&HFFFFFF&\\3a&H90&}m %.1f %.1f l %.1f %.1f %.1f %.1f %.1f %.1f{\\p0}",
+            1.5 * k, x0, y0, x0 + bw, y0, x0 + bw, y0 + bh, x0, y0 + bh)
+        -- keep the cursor in view: show at most ~70 characters before it
+        local before = bx.before
+        local n = 0
+        for _ in before:gmatch("[%z\1-\127\194-\244][\128-\191]*") do n = n + 1 end
+        if n > 70 then
+            local skip = n - 70
+            before = "…" .. before:gsub("^" .. string.rep("[%z\1-\127\194-\244][\128-\191]*", skip), "")
+        end
+        events[#events + 1] = string.format(
+            "{\\an4\\pos(%.1f,%.1f)\\bord0\\shad0\\q2\\1c&H909090&\\1a&H00&\\fs%.1f}%s  " ..
+            "{\\1c&HFFFFFF&}%s{\\1c&H40C0FF&}|{\\1c&HFFFFFF&}%s",
+            x0 + 16 * k, y0 + bh / 2, fs, "Notes for " .. bx.num, esc(before), esc(bx.after))
+        events[#events + 1] = string.format(
+            "{\\an8\\pos(%.1f,%.1f)\\bord%.2f\\shad0\\q2\\3c&H000000&\\3a&H50&\\1c&HB0B0B0&\\1a&H00&\\fs%.1f}%s",
+            vx0 + vw / 2, y0 + bh + 6 * k, 1.5 * k, 20 * k, "Enter saves the note  ·  Esc leaves it as it was")
+        return
+    end
     if list.note and list.note ~= "" then   -- the shot's note, under the row
         local note = list.note
         if #note > 140 then note = note:sub(1, 137):gsub("[\128-\191]*$", ""):gsub("[\192-\255]$", "") .. "…" end
-        note = note:gsub("[{}]", "\\%0"):gsub("\\([^{}])", "\\\226\128\139%1")
+        note = esc(note)
         events[#events + 1] = string.format(
             "{\\an8\\pos(%.1f,%.1f)\\bord%.2f\\shad0\\q0\\3c&H000000&\\3a&H50&\\1c&HFFFFFF&\\1a&H00&\\fs%.1f}%s",
             vx0 + vw / 2, y + h + 6 * k, 2 * k, 28 * k, note)
@@ -2745,24 +2772,76 @@ function notes.of(r, num)
     return b and b.note or ""
 end
 
--- the note box: pre-filled with the shot's note; Enter keeps the text, Esc
--- leaves the note as it was
+-- The note box: drawn under the state row (mpv's own input line sits at the
+-- bottom, under the playback controls), pre-filled with the shot's note. Enter
+-- keeps the text, Esc leaves the note as it was. While it's open every key types.
+notes.box = nil          -- {r, num, chars = {utf-8 characters}, pos = characters before the cursor}
+notes.keys = {}         -- the forced bindings while the box is open
+
+function notes.chars(s)
+    local out = {}
+    for ch in (s or ""):gmatch("[%z\1-\127\194-\244][\128-\191]*") do out[#out + 1] = ch end
+    return out
+end
+
+function notes.close(keep)
+    local b = notes.box
+    if not b then return end
+    notes.box = nil
+    for _, name in ipairs(notes.keys) do mp.remove_key_binding(name) end
+    notes.keys = {}
+    if keep then
+        local text = trim(table.concat(b.chars):gsub("[%c]+", " "))
+        if text ~= notes.of(b.r, b.num) then
+            b.r.notes[b.num] = text
+            b.r.touched[b.num], b.r.cleared[b.num] = true, nil
+        end
+    end
+    render(true)
+end
+
 function notes.edit(shot)
     local r = current_review()
     if not r or review_busy or export.prompting or not shot or not shot.num or in_preview(r) then return end
-    local num = shot.num
-    require("mp.input").get({
-        prompt = "Notes for " .. num .. " (Enter to save, Esc to skip): ",
-        default_text = notes.of(r, num),
-        submit = function(text)
-            text = trim((text or ""):gsub("[\r\n]+", " "))
-            if text ~= notes.of(r, num) then
-                r.notes[num] = text
-                r.touched[num], r.cleared[num] = true, nil
-            end
-            render(true)
-        end,
-    })
+    if notes.box then notes.close(true) end
+    mp.set_property_bool("pause", true)   -- the row, and so the box, shows while paused
+    local chars = notes.chars(notes.of(r, shot.num))
+    notes.box = {r = r, num = shot.num, chars = chars, pos = #chars}
+    local b = notes.box
+    local function insert(s)
+        for _, ch in ipairs(notes.chars(s)) do
+            if not ch:match("^%c$") then table.insert(b.chars, b.pos + 1, ch); b.pos = b.pos + 1 end
+        end
+    end
+    local function key(name, fn, complex)
+        local id = "shot_note_" .. name
+        mp.add_forced_key_binding(name, id, function(e)
+            if notes.box ~= b then return end
+            if complex and e.event == "up" then return end
+            fn(e)
+            if notes.box == b then render(true) end
+        end, {repeatable = true, complex = complex})
+        notes.keys[#notes.keys + 1] = id
+    end
+    key("ANY_UNICODE", function(e) insert(e.key_text or "") end, true)
+    key("SPACE", function() insert(" ") end)
+    key("BS", function() if b.pos > 0 then table.remove(b.chars, b.pos); b.pos = b.pos - 1 end end)
+    key("DEL", function() if b.pos < #b.chars then table.remove(b.chars, b.pos + 1) end end)
+    key("LEFT", function() b.pos = math.max(0, b.pos - 1) end)
+    key("RIGHT", function() b.pos = math.min(#b.chars, b.pos + 1) end)
+    key("HOME", function() b.pos = 0 end)
+    key("END", function() b.pos = #b.chars end)
+    key("Ctrl+a", function() b.pos = 0 end)
+    key("Ctrl+e", function() b.pos = #b.chars end)
+    key("Ctrl+u", function() b.chars, b.pos = {}, 0 end)
+    for _, k in ipairs({"Ctrl+v", "Meta+v"}) do
+        key(k, function() insert((mp.get_property("clipboard/text") or ""):gsub("[\r\n]+", " ")) end)
+    end
+    for _, k in ipairs({"UP", "DOWN", "WHEEL_UP", "WHEEL_DOWN", "TAB"}) do key(k, function() end) end
+    key("ENTER", function() notes.close(true) end)
+    key("KP_ENTER", function() notes.close(true) end)
+    key("ESC", function() notes.close(false) end)
+    render(true)
 end
 
 -- The row across the top: one state per shot, the set one lit
@@ -2772,6 +2851,11 @@ review_buttons = function(shot)
     if r.preview then return {row = true, preview = "PREVIEW  ·  " .. lock.who(r.preview) .. "  ·  nothing can be saved"} end
     local cur = mark_of(r, shot)
     local list = {row = true, note = notes.of(r, shot.num)}
+    local b = notes.box
+    if b and b.num == shot.num then
+        list.box = {num = b.num, before = table.concat(b.chars, "", 1, b.pos),
+                    after = table.concat(b.chars, "", b.pos + 1, #b.chars), len = #b.chars}
+    end
     for _, m in ipairs(MARKS) do
         list[#list + 1] = {name = m.name, text = m.label, color = m.color, star = m.star, lit = cur == m.name}
     end
