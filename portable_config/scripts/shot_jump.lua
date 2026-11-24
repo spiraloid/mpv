@@ -3175,7 +3175,7 @@ function notes.read_imported(r)
 end
 
 -- Seen: which versions someone has watched. A version counts as seen once it has
--- been on screen for a second in a review, and the editor's mpv records it in
+-- been on screen for 0.4 s in a review, and the editor's mpv records it in
 -- <shots>/seen.json ({"since", "files": {path: {"at", "by"}}}, written in place a
 -- few seconds later). Files older than "since" (when the file was first made)
 -- count as seen, so only generations made after it can be new. A shot with
@@ -3263,11 +3263,11 @@ B.unseen = function(shot)
     return n
 end
 
--- every half second: what's on screen, and for how long
+-- every quarter second: what's on screen, and for how long
 function notes.seen_tick()
     local r = current_review()
     notes.ticks = (notes.ticks or 0) + 1
-    if r and r.seen and notes.seen_dirty and notes.ticks % 6 == 0 then
+    if r and r.seen and notes.seen_dirty and notes.ticks % 12 == 0 then
         notes.seen_dirty = false
         notes.seen_write(r)
     end
@@ -3278,7 +3278,7 @@ function notes.seen_tick()
     if not rel then notes.watch = nil; return end
     local w = notes.watch
     if not w or w.rel ~= rel then notes.watch = {rel = rel, t = mp.get_time()}; return end
-    if mp.get_time() - w.t >= 1.0 and r.seen.files[rel] == nil then
+    if mp.get_time() - w.t >= 0.4 and r.seen.files[rel] == nil then
         r.seen.files[rel] = {at = os.time(), by = notes.reviewer(r)}
         -- a slot playing a copy (a final) shows its original: both count as seen
         local play = shot.play and rel_file(r, shot.play)
@@ -3312,6 +3312,7 @@ mp.register_script_message("unseen-report", function()
         table.sort(files)
         if n > 0 then msg.info(string.format("unseen %s: %d  %s", num, n, table.concat(files, " "))) end
     end
+    msg.info("unseen-report: end")
 end)
 
 function notes.shot_for(num)
@@ -3852,7 +3853,7 @@ review_loaded = function(asm)
     -- seen versions: read once, and the shots' unseen ones on the first load and after a save
     if not r.seen then notes.seen_load(r) end
     if not r.unseen or r.rescan then r.rescan = nil; notes.unseen_scan(r) end
-    if not notes.seen_timer then notes.seen_timer = mp.add_periodic_timer(0.5, function() notes.seen_tick() end) end
+    if not notes.seen_timer then notes.seen_timer = mp.add_periodic_timer(0.25, function() notes.seen_tick() end) end
     local cache = {}
     for _, shot in ipairs(asm.shots) do
         if shot.rung and shot.play then
