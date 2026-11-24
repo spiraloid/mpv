@@ -37,6 +37,7 @@ local o = {
     review_save_cmds = "",
     review_reviewers = "",   -- under the XML's folder: {"logins": {login: name}}
     export_audio_clip = "",  -- id of an audio clip whose file is the rendered video's sound
+    real_pointer = true,     -- Mac: a click asks macOS where the pointer is (no: trust mpv; for tests)
 }
 options.read_options(o, "shot_jump")
 
@@ -1780,16 +1781,69 @@ end
 
 -- ── mouse: click the buttons ──────────────────────────────────────────────────
 
+-- mpv drags the window when the pointer moves a few pixels with the button held,
+-- and a click that turned into a drag never reaches a button. Over a button, and
+-- while a prompt is up, the window doesn't drag.
+local drag = {holds = {}}
+function drag.hold(why, on)
+    if on and not next(drag.holds) then drag.was = mp.get_property("window-dragging") end
+    drag.holds[why] = on or nil
+    if next(drag.holds) then mp.set_property("window-dragging", "no")
+    elseif drag.was then mp.set_property("window-dragging", drag.was); drag.was = nil end
+end
+
+-- Where the pointer really is, at a click. On the Mac, mpv only learns the pointer's
+-- place from mouse-moved events, and for a while after a reload or a prompt
+-- opening it may hear none: its mouse-pos stays where the pointer was, and a
+-- click lands on whatever used to be there (or nothing). So a click asks macOS
+-- (NSEvent.mouseLocation and this window's frame, about 0.1 s) and maps that
+-- to the OSD. Elsewhere, and if that fails, mouse-pos.
+drag.JXA = [==[
+ObjC.import('AppKit'); ObjC.import('CoreGraphics');
+function run(argv) {
+  var pid = parseInt(argv[0]), loc = $.NSEvent.mouseLocation;
+  var H = $.NSScreen.screens.objectAtIndex(0).frame.size.height;
+  var list = ObjC.castRefToObject($.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly, $.kCGNullWindowID));
+  for (var i = 0; i < list.count; i++) {
+    var w = list.objectAtIndex(i);
+    if (w.objectForKey('kCGWindowOwnerPID').js == pid && w.objectForKey('kCGWindowLayer').js == 0) {
+      var b = w.objectForKey('kCGWindowBounds');
+      return [loc.x, H - loc.y, b.objectForKey('X').js, b.objectForKey('Y').js, b.objectForKey('Width').js, b.objectForKey('Height').js].join(' ');
+    }
+  }
+  return '';
+}
+]==]
+function drag.pointer()
+    local m = mp.get_property_native("mouse-pos")
+    if mp.get_property("platform") ~= "darwin" or not o.real_pointer then return m end
+    if not drag.jxa_path then
+        drag.jxa_path = utils.join_path(temp_dir(), "mpv-pointer.js")
+        write_file(drag.jxa_path, drag.JXA)
+    end
+    local r = mp.command_native({name = "subprocess", playback_only = false, capture_stdout = true,
+                                 capture_stderr = true,
+                                 args = {"osascript", "-l", "JavaScript", drag.jxa_path, tostring(utils.getpid())}})
+    local v = {}
+    for n in ((r and r.status == 0 and r.stdout) or ""):gmatch("%-?[%d%.]+") do v[#v + 1] = tonumber(n) end
+    local d = mp.get_property_native("osd-dimensions")
+    if #v < 6 or not d or not d.w or v[5] <= 0 or v[6] <= 0 then return m end
+    return {x = (v[1] - v[3]) * d.w / v[5], y = (v[2] - v[4]) * d.h / v[6], hover = true}
+end
+
 local click_bound = false
 local function set_click_binding(on)
     if on == click_bound then return end
     click_bound = on
     if on then
         mp.add_forced_key_binding("MBTN_LEFT", "shot_button_click", function()
-            update_hover(mp.get_property_native("mouse-pos"))   -- where the pointer is now
-            if hovered == "restore" then restore()
-            elseif hovered == "reject" then retire()
-            elseif hovered and review_click then review_click(hovered) end
+            local p, h = drag.pointer(), nil   -- where the pointer really is now
+            for _, bt in ipairs(buttons) do
+                if bt.enabled and p and p.x >= bt.x0 and p.x <= bt.x1 and p.y >= bt.y0 and p.y <= bt.y1 then h = bt.name end
+            end
+            if h == "restore" then restore()
+            elseif h == "reject" then retire()
+            elseif h and review_click then review_click(h) end
         end)
         -- keep a quick second click from toggling fullscreen
         mp.add_forced_key_binding("MBTN_LEFT_DBL", "shot_button_dbl", function() end)
@@ -1805,17 +1859,6 @@ end
 -- click, so near the buttons the controller is told to stay hidden, and the
 -- click binding is put back on top once it has let go.
 local osc_hidden = false
--- mpv drags the window when the pointer moves a few pixels with the button held,
--- and a click that turned into a drag never reaches a button. Over a button, and
--- while a prompt is up, the window doesn't drag.
-local drag = {holds = {}}
-function drag.hold(why, on)
-    if on and not next(drag.holds) then drag.was = mp.get_property("window-dragging") end
-    drag.holds[why] = on or nil
-    if next(drag.holds) then mp.set_property("window-dragging", "no")
-    elseif drag.was then mp.set_property("window-dragging", drag.was); drag.was = nil end
-end
-
 local function hide_osc(on)
     if on == osc_hidden then return end
     osc_hidden = on
@@ -1845,8 +1888,10 @@ update_hover = function(m)
         near = m.x >= x0 - pad and m.x <= x1 + pad and m.y <= y1 + pad
     end
     hide_osc(near)
-    drag.hold("button", h ~= nil)
-    set_click_binding(h ~= nil)
+    -- bound while any button shows, not only when mpv thinks the pointer is on one:
+    -- the click itself asks where the pointer is
+    drag.hold("button", #buttons > 0)
+    set_click_binding(#buttons > 0)
     if h ~= hovered then hovered = h; render() end
 end
 
@@ -2372,8 +2417,10 @@ function modal.log_click(m, hit)
     local rects = {}
     for i, r in ipairs(modal.rects or {}) do rects[#rects + 1] = string.format("%d:%.0f,%.0f-%.0f,%.0f", i, r[1], r[2], r[3], r[4]) end
     local c = modal.check_rect
-    old[#old + 1] = string.format("%s  pointer %s,%s  hit %s  osd %sx%s  buttons %s  checkbox %s",
-        os.date("%H:%M:%S"), tostring(m and m.x), tostring(m and m.y), hit, tostring(d.w), tostring(d.h),
+    local mp_pos = mp.get_property_native("mouse-pos") or {}
+    old[#old + 1] = string.format("%s  pointer %s,%s (mpv thought %s,%s)  hit %s  osd %sx%s  buttons %s  checkbox %s",
+        os.date("%H:%M:%S"), tostring(m and m.x and math.floor(m.x)), tostring(m and m.y and math.floor(m.y)),
+        tostring(mp_pos.x), tostring(mp_pos.y), hit, tostring(d.w), tostring(d.h),
         table.concat(rects, " "), c and string.format("%.0f,%.0f-%.0f,%.0f", c[1], c[2], c[3], c[4]) or "none")
     write_file(path, table.concat(old, "\n") .. "\n")
 end
@@ -2383,6 +2430,7 @@ mp.observe_property("osd-dimensions", "native", function() if modal.spec then dr
 
 local function close_modal()
     drag.hold("prompt", false)
+    mp.set_property_native("user-data/shot_jump/prompt", false)
     modal.spec = nil
     export.prompting = false
     modal_overlay:remove()
@@ -2393,6 +2441,7 @@ end
 
 local function open_modal(spec)
     drag.hold("prompt", true)
+    mp.set_property_native("user-data/shot_jump/prompt", true)   -- a prompt is up (for other scripts, tests)
     -- the state row's click binding must not sit under the prompt's: two bindings
     -- on the same button and mpv picks either one
     hovered = nil
@@ -2430,7 +2479,7 @@ local function open_modal(spec)
         end
     end
     local function click()
-        local m = mp.get_property_native("mouse-pos")
+        local m = drag.pointer()
         local c = modal.check_rect
         local i = over(m)
         local on_check = not i and c and m and m.x >= c[1] and m.x <= c[3] and m.y >= c[2] and m.y <= c[4]
