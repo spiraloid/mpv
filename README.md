@@ -178,7 +178,7 @@ Drag an FCP7 `.xml` onto mpv (or open it like any file):
 - A label ending in `MISSING PLATE` draws the number plus a large centred card over a red wash.
 - A clip with no `<comments>` gets no label.
 - A slot playing a fallback after a reject is labelled for what it actually shows (see below).
-- When a rung holds more than one version of the shot (live or retired), a small line above the label says which one is on screen: the file's date and its place among them, oldest first, e.g. `11-21 18:50 · 2 of 3`. The numbers stay put as you reject and un-retire. The label itself keeps the `NN stage PP` format.
+- When a rung holds more than one version of the shot (live or retired), a small line above the label says which one is on screen: the file's date and its place among them, lowest pass first, e.g. `11-21 18:50 · 2 of 3`. The numbers stay put as you reject and un-retire. The label itself keeps the `NN stage PP` format.
 
 ### Checking the XML against the folders
 
@@ -234,7 +234,7 @@ A shot's file is one named for its shot number: `07.mp4` or `07_v4.mp4`, anywher
 
 Keep pressing `r` and you step back through the shot's history, from candidate, to the latest run, to the older run, to the cleaned plate, to the cropped plate. The label follows: it reads `07 run 00` while a run plays and `07 cleaned plate` on the plate, with the pass number taken from the `v.NNN` folder. Only when nothing at all is left is the slot the dark gray **REJECTED** clip.
 
-**Un-retire walks back up, like a playhead.** Think of a shot's versions as a tape, ordered by rung and then by file date: `A_` plates at the start, the newest file in the highest rung at the end. What the slot shows is the playhead. Reject rewinds it. Un-retire (the rotate-ccw button or `u`) moves it forward: it takes the retired version of that shot just *above* what's showing, from any rung's `retired/` folder, moves it back to its old folder (recreated if needed), and plays it.
+**Un-retire walks back up, like a playhead.** Think of a shot's versions as a tape, ordered by rung, then by pass (the `v.NNN` folder, the number on the label), then by file date for takes that share a pass: `A_` plates at the start, the newest file in the highest rung at the end. What the slot shows is the playhead. Reject rewinds it. Un-retire (the rotate-ccw button or `u`) moves it forward: it takes the retired version of that shot just *above* what's showing, from any rung's `retired/` folder, moves it back to its old folder (recreated if needed), and plays it.
 
 So you can reject your way down to see every version of a shot, every run and every plate, then press un-retire on repeat. It brings them back earliest first and ends on the latest. Nothing is logged; the folders are the tape:
 - **Any retired file counts,** whether mpv retired it, another tool did, or you moved it by hand.
@@ -242,7 +242,7 @@ So you can reject your way down to see every version of a shot, every run and ev
 - **A file whose old place is taken is skipped.**
 - **Undo everything** and the folders, the XML and its `.bak` are exactly as they started.
 
-**A shot's history: `UP` / `DOWN`.** `LEFT` / `RIGHT` move between shots; `UP` / `DOWN` move through every version of the shot you're on. `DOWN` all the way is the final, `UP` all the way is the cleaned plate, and the ends stop. In between, newest to oldest: candidates, driver candidates, run candidates, runs. Within a rung the order is file date, the same tape reject and un-retire use. Retired takes are in the history too, where they would sit if they were live, with `retired` on the label; `u` on one brings that take back. The cropped plate under the cleaned one is left out unless it is all the shot has.
+**A shot's history: `UP` / `DOWN`.** `LEFT` / `RIGHT` move between shots; `UP` / `DOWN` move through every version of the shot you're on. `DOWN` all the way is the final, `UP` all the way is the cleaned plate, and the ends stop. In between, newest to oldest: candidates, driver candidates, run candidates, runs. Within a rung the order is the pass number (`v.002` is newer than `v.001`), the same tape reject and un-retire use. Retired takes are in the history too, where they would sit if they were live, with `retired` on the label; `u` on one brings that take back. The cropped plate under the cleaned one is left out unless it is all the shot has.
 
 Each press swaps that version into the slot for real: the XML's clip points at the file and its label updates, so it plays in the cut, on the same frame, paused or playing. A note shows where you are (`07 run 00 · 4 / 9`). No file moves. It counts as a change like a reject: quit and **Save changes?** Yes keeps it and renders the video, No puts the XML back. Step back to the version you started on and there is nothing to save, so quitting doesn't ask.
 
@@ -267,9 +267,9 @@ Quit (`Esc`, `q`, window close, Cmd+Q) after changing anything and a full-frame 
 The arrow keys and `Tab` move the highlight, and `Enter` takes it. You can also click a button. A quit that never shows the prompt (a crash aside) counts as **No**, so nothing is overwritten by accident. Quitting without having changed anything just quits.
 
 **The video (Yes only).** mpv renders the whole edit beside the XML with the XML's name (`daily.xml` → `daily.mp4`), replacing the old one, and quits once that's done. A full-frame **SAVING…** card covers the picture meanwhile, with the file name and a seconds counter.
-- **Encode:** H.264 High at CRF 18 with bt709 colour tags, at the edit's frame rate with every frame present (a short source holds its last frame), plus AAC at 48 kHz with the soundtrack's channels.
+- **Encode:** H.264 High at CRF 18 with bt709 colour tags, every clip converted to the edit's size and 8-bit 4:2:0 (so a 10-bit take in the cut doesn't stop the render), at the edit's frame rate with every frame present (a short source holds its last frame), plus AAC at 48 kHz with the soundtrack's channels.
 - **Burned in:** the shot labels and any REJECTED / MISSING cards, positioned as on screen.
-- **Writing:** the render goes to a hidden temp file and is renamed over the old video only when it's complete.
+- **Writing:** the render goes to a hidden temp file and is renamed over the old video only when it's complete. If it fails, the old video stays and the message says why.
 - **Skipping:** quit again while it renders to skip the video and leave the old one untouched.
 
 ## Scripts

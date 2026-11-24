@@ -268,6 +268,9 @@ local function parse_xmeml(text, base_dir)
     -- Tracks after the sequence's <media>; once a sequence-level <audio> opens
     -- between tracks, the rest are audio tracks.
     local media = text:sub(media_s)
+    local fmt = media:sub(1, (media:find("<track[%s>]") or 1) - 1)   -- the sequence's own format
+    seq.w = tonumber(fmt:match("<width>%s*(%d+)%s*</width>"))
+    seq.h = tonumber(fmt:match("<height>%s*(%d+)%s*</height>"))
     local kind, prev_e = nil, 1
     for _, tb in ipairs(blocks(media, "track")) do
         local between = media:sub(prev_e, tb.s - 1)
@@ -312,7 +315,7 @@ local export = {dirty = false}  -- assembly changed this session: render it on e
 local session = {snap = {}, journal = {}}
 local function journal_move(from, to) session.journal[#session.journal + 1] = {from = from, to = to} end
 local encoding = (mp.get_property("o") or "") ~= ""   -- running as the exporter itself
-local add_burn_in, bind_quit_keys, show_validation   -- defined further down
+local add_burn_in, bind_quit_keys, show_validation, modal_hover   -- defined further down
 local scan                  -- running scan: path, token, log, offset, buf, cuts
 local scanned = {}          -- path -> finished cut list for this session
 local scan_timer
@@ -404,15 +407,15 @@ local function rung_label(ri, num_text)
     return (num_text or ri.num) .. " " .. stage .. pass .. (ri.retired and " retired" or "")
 end
 
--- Where a version sits on the tape, oldest to newest: rung letter, then the file's
--- modified time (the moment the take was written; copies keep it), then path as a
--- tie-break. Not the pass number or the run folder name: passes get uploaded out
--- of order and run folders are named on different clocks. Retired and live copies
--- of a file get the same key.
+-- Where a version sits on the tape, oldest to newest: rung letter, then the pass
+-- (the v.NNN folder, the number the label shows), then the file's modified time
+-- for takes that share a pass (copies keep it), then path as a tie-break. Retired
+-- and live copies of a file get the same key.
 local function version_key(path, mtime)
     local ri = rung_info(path)
     if not ri then return nil end
-    return {ri.letter, mtime or 0, slash(live_path(ri))}
+    local pass = tonumber(ri.sub:match("v%.(%d+)/")) or -1
+    return {ri.letter, pass, mtime or 0, slash(live_path(ri))}
 end
 
 local function key_above(a, b)   -- is a later on the tape than b
@@ -437,7 +440,7 @@ local function rung_files(dir, cache, all)
                and VIDEO_EXT[ext:lower()] then
                 local p = utils.join_path(d, f)
                 local info = utils.file_info(p)
-                if info and info.is_file then
+                if info and info.is_file and (info.size or 1) > 0 then   -- empty stubs don't count
                     local vk = version_key(p, info.mtime)
                     if vk then out[#out + 1] = {path = p, nn = tonumber(num), mtime = info.mtime or 0, vk = vk} end
                 end
@@ -461,17 +464,17 @@ local function version_detail(ri, play_path, cache)
     local rung_dir = native_seps(ri.shots .. "/" .. ri.rung)
     local rows = {}
     for _, f in ipairs(rung_files(rung_dir, cache)) do
-        if f.nn == ri.nn then rows[#rows + 1] = {key = f.vk[3], mtime = f.mtime, vk = f.vk} end
+        if f.nn == ri.nn then rows[#rows + 1] = {key = f.vk[#f.vk], mtime = f.mtime, vk = f.vk} end
     end
     for _, f in ipairs(rung_files(utils.join_path(rung_dir, "retired"), cache)) do
-        if f.nn == ri.nn then rows[#rows + 1] = {key = f.vk[3], mtime = f.mtime, vk = f.vk} end
+        if f.nn == ri.nn then rows[#rows + 1] = {key = f.vk[#f.vk], mtime = f.mtime, vk = f.vk} end
     end
     if #rows < 2 then return nil end
     table.sort(rows, function(a, b) return key_above(b.vk, a.vk) end)
     local here, idx = slash(play_path), nil
     for i, r in ipairs(rows) do if r.key == here then idx = i end end
     if not idx then return nil end
-    -- when: the file's date, the same clock the order uses
+    -- when: the file's date
     local when = os.date("%m-%d %H:%M", rows[idx].mtime)
     return string.format("%s · %d of %d", when, idx, #rows)
 end
@@ -515,7 +518,7 @@ local function resolve_source(path, enabled, cache)
 end
 
 -- ── the playhead: reject rewinds, un-retire goes forward ─────────────────────
--- A shot's versions sit on a tape ordered by version_key: higher rung is later,
+-- A shot's versions sit on a tape ordered by version_key: higher rung is later, then higher pass,
 -- then newer file. Reject retires what's showing and
 -- the slot drops to the next live file down (walk_down). Un-retire brings back
 -- the retired file closest *above* what's showing, so pressing it on repeat
@@ -1013,7 +1016,7 @@ local function validate(asm, seq, xml_path)
             local parts = {}
             for _, e in ipairs(list) do parts[#parts + 1] = string.format("%+dh ×%d", e[1], e[2]) end
             notes[#notes + 1] = "run folders are named on different clocks (" .. table.concat(parts, ", ") ..
-                "), so their names don't sort by time; versions are ordered by file date"
+                "), so their names don't sort by time; versions are ordered by pass, then file date"
         end
     end
     for _, l in ipairs(fix) do msg.warn("validation: " .. l) end
@@ -1104,6 +1107,14 @@ mp.add_hook("on_load", 50, function()
         end
     end
     if encoding then
+        -- one picture for the whole render: the encoder stops at the first clip whose
+        -- size or pixel format differs from the one before (a 10-bit take among 8-bit)
+        local same = "format=yuv420p"
+        if seq.w and seq.h and seq.w > 0 and seq.h > 0 then
+            same = string.format("scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,setsar=1,",
+                                 seq.w, seq.h, seq.w, seq.h) .. same
+        end
+        table.insert(chain, 1, same)
         -- constant frame rate: a source shorter than its slot holds its last frame
         local f = asm.fps
         local rate = math.abs(f - round(f)) > 0.001 and string.format("%d/1001", round(f * 1001)) or tostring(round(f))
@@ -1872,6 +1883,10 @@ local function hide_osc(on)
 end
 
 update_hover = function(m)
+    if export.prompting or export.running then   -- a prompt is up: its buttons, and no controller
+        if export.prompting and modal_hover then modal_hover(m) end
+        return
+    end
     local h, near = nil, false
     if m and m.hover and #buttons > 0 then
         local pad = 0
@@ -1919,7 +1934,7 @@ local function ass_header(w, h)
 end
 
 -- ── Up / Down: a shot's history ───────────────────────────────────────────────
--- Every version of the shot on screen, in tape order (rung, then file date, as
+-- Every version of the shot on screen, in tape order (rung, then pass, as
 -- reject and un-retire use): the final at the bottom, then candidates, drivers,
 -- runs, and the cleaned plate at the top. Retired takes sit where they would if
 -- they were live. Up swaps the next older one into the slot, Down the next
@@ -2031,10 +2046,23 @@ end
 
 local function export_target(xml) return (xml:gsub("%.[xX][mM][lL]$", "")) .. ".mp4" end
 
+local function export_log() return utils.join_path(temp_dir(), string.format("mpv_export_%d.log", utils.getpid())) end
+
+-- Why the render stopped: the error lines of its log
+local function export_errors()
+    local out = {}
+    for line in (read_file(export_log()) or ""):gmatch("[^\r\n]+") do
+        local text = line:match("^%[[^%]]*%]%[[ef]%]%[[^%]]*%]%s*(.+)$")
+        if text and not text:find("unknown script", 1, true) then out[#out + 1] = text end
+    end
+    return out
+end
+
 local function export_args(xml, out)
     local cfg = (mp.command_native({"expand-path", "~~/"}) or ""):gsub("[/\\]+$", "")
     return {
         mpv_binary(), "--config-dir=" .. cfg, "--load-scripts=yes", "--no-terminal", "--osc=no",
+        "--log-file=" .. export_log(),
         "--loop-file=no", "--loop-playlist=no", "--pause=no", "--idle=no", "--keep-open=no",
         "--o=" .. out, "--of=mp4", "--ovc=libx264",
         "--ovcopts=crf=18,preset=medium,profile=high,colorspace=bt709,color_primaries=bt709,color_trc=bt709",
@@ -2050,13 +2078,29 @@ local function finish_export(xml, ok)
     local target = export_target(xml)
     local tmp = export_tmp(target)
     if ok and exists(tmp) then
-        os.remove(target)
-        if os.rename(tmp, target) then
+        local landed = os.rename(tmp, target)       -- replaces the old video in one step
+        if not landed and exists(target) then
+            -- Windows won't rename over a file: set the old video aside, and put it
+            -- back if the new one can't take its place
+            local old = target .. ".old"
+            os.remove(old)
+            if os.rename(target, old) then
+                landed = os.rename(tmp, target)
+                if landed then os.remove(old) else os.rename(old, target) end
+            end
+        end
+        if landed then
+            os.remove(export_log())
             msg.info("exported " .. target)
             return true
         end
+        export.why = "could not replace " .. name_of(target)
     end
     os.remove(tmp)
+    local errs = export_errors()
+    for _, e in ipairs(errs) do msg.error("export: " .. e) end
+    export.why = export.why or errs[1]
+    os.remove(export_log())
     msg.error("export failed: " .. target)
     return false
 end
@@ -2085,9 +2129,12 @@ local function run_export(done)
     local xml = export.xml
     local tmp = export_tmp(export_target(xml))
     os.remove(tmp)
+    os.remove(export_log())
+    export.why = nil
     local t0 = mp.get_time()
     mp.set_property_bool("pause", true)
     clear_overlay()
+    hide_osc(true)
     local name = name_of(export_target(xml))
     draw_saving(name, 0)
     local tick = mp.add_periodic_timer(0.5, function()
@@ -2106,8 +2153,8 @@ local function run_export(done)
                 done(good)
             else
                 saving_overlay:remove()
-                osd("could not save the assembly video", 3)
-                mp.add_timeout(2, function() done(good) end)
+                osd("could not save the assembly video" .. (export.why and (":\n" .. export.why) or ""), 5)
+                mp.add_timeout(4, function() done(good) end)
             end
         end)
 end
@@ -2249,14 +2296,27 @@ local function open_modal(spec)
     bind("ENTER", function() local i = modal.sel; close_modal(); spec.done(i) end)
     bind("KP_ENTER", function() local i = modal.sel; close_modal(); spec.done(i) end)
     bind("LEFT", move(-1)); bind("RIGHT", move(1)); bind("TAB", move(1)); bind("Shift+TAB", move(-1))
-    bind("MBTN_LEFT", function()
-        local m = mp.get_property_native("mouse-pos")
+    local function over(m)   -- the button under the pointer
         for i, r in ipairs(modal.rects) do
-            if m and m.x >= r[1] and m.x <= r[3] and m.y >= r[2] and m.y <= r[4] then close_modal(); spec.done(i); return end
+            if m and m.x >= r[1] and m.x <= r[3] and m.y >= r[2] and m.y <= r[4] then return i end
         end
-    end)
+    end
+    local function click()
+        local i = over(mp.get_property_native("mouse-pos"))
+        if i then close_modal(); spec.done(i) end
+    end
+    modal_hover = function(m)
+        local i = modal.spec == spec and over(m)
+        if i and i ~= modal.sel then modal.sel = i; draw_modal() end
+    end
+    bind("MBTN_LEFT", click)
     bind("MBTN_LEFT_DBL", function() end)
     draw_modal()
+    -- the on-screen controller takes the click while it shows; once it has hidden,
+    -- bind again so this card's click sits on top (as the shot buttons do)
+    mp.add_timeout(0.1, function()
+        if modal.spec == spec then mp.add_forced_key_binding("MBTN_LEFT", "shot_modal_MBTN_LEFT", click) end
+    end)
 end
 
 local choose   -- set below
@@ -2269,10 +2329,10 @@ local function open_prompt()
     local what = {}
     if moved > 0 then what[#what + 1] = moved .. (moved == 1 and " file move" or " file moves") end
     if made > 0 then what[#what + 1] = made .. (made == 1 and " approved copy" or " approved copies") end
-    if edits > 0 then what[#what + 1] = "XML regenerated" end
+    if edits > 0 then what[#what + 1] = "XML changed" end
     open_modal({
         title = "Save changes?", title_fs = 96,
-        lines = {table.concat(what, ", ") .. " this session.  Yes keeps them and renders the video.  " ..
+        lines = {table.concat(what, ", ") .. " this session.  Yes keeps the changes and renders the video.  " ..
                  "No puts everything back as it was when opened."},
         choices = {{label = "Yes", keys = {"y", "Y"}}, {label = "No", keys = {"n", "N"}},
                    {label = "Cancel", keys = {"c", "C"}}},
