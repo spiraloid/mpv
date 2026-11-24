@@ -219,7 +219,7 @@ If a script is missing or fails, the card says so, word for word, and the choice
 
 **Any other XML in the same folders** (a dated daily, say) is browse-only: `UP` / `DOWN` work, nothing is saved, and the note says to open the review XML to choose.
 
-**Quitting** with unsaved choices asks **Save changes?** Yes saves as above and then quits, No forgets the session's choices (nothing was written, so nothing needs undoing), Cancel carries on.
+**Quitting** with unsaved choices asks **Save changes?** Yes saves as above and then quits, No forgets the session's choices (nothing was written, so nothing needs undoing), Cancel carries on. Tick **Also save an .mp4 of the review** (click it or press `V`; off by default) and Yes also renders the rebuilt review XML to an `.mp4` beside it (`review.xml` → `review.mp4`) behind a **SAVING…** card, then quits; pressing quit again skips the video. It renders only when the save went through, so the video never shows an XML the scripts failed to rebuild.
 
 **Start and end frames: `Ctrl+S`.** On the first frame of a shot it saves `NN_start.png`, on the last frame `NN_end.png`: the clean video frame of the version showing, with no label or buttons. They go in the frames rung (the `C_` folder), in one new pass per mpv session, opened on the first save. A file that is already there is never replaced. On any other frame `Ctrl+S` takes the usual numbered snapshot.
 

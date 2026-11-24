@@ -2229,6 +2229,26 @@ local function draw_modal()
             w / 2, y, 25 * k, ass_text(line))
         y = y + line_h
     end
+    modal.check_rect = nil
+    if spec.check then   -- one checkbox above the buttons: click it or press its key
+        local c, box, fs = spec.check, 30 * k, 28 * k
+        local label_w = #c.label * fs * 0.5
+        local x0 = w / 2 - (box + 14 * k + label_w) / 2
+        local y0 = y + 22 * k
+        ev[#ev + 1] = string.format(
+            "{\\an7\\pos(0,0)\\p1\\bord%.2f\\shad0\\1c&H%s&\\1a&H%s&\\3c&HFFFFFF&\\3a&H00&}m %.0f %.0f l %.0f %.0f %.0f %.0f %.0f %.0f{\\p0}",
+            2 * k, c.on and "FFFFFF" or "000000", c.on and "00" or "FF", x0, y0, x0 + box, y0, x0 + box, y0 + box, x0, y0 + box)
+        if c.on then   -- a check mark
+            ev[#ev + 1] = string.format(
+                "{\\an7\\pos(0,0)\\p1\\bord%.2f\\shad0\\1a&HFF&\\3c&H000000&\\3a&H00&}m %.1f %.1f l %.1f %.1f l %.1f %.1f l %.1f %.1f l %.1f %.1f{\\p0}",
+                2.4 * k, x0 + 7 * k, y0 + 16 * k, x0 + 13 * k, y0 + 22 * k, x0 + 24 * k, y0 + 8 * k,
+                x0 + 13 * k, y0 + 22 * k, x0 + 7 * k, y0 + 16 * k)
+        end
+        ev[#ev + 1] = string.format("{\\an4\\pos(%.1f,%.1f)\\bord0\\shad0\\q2\\1c&HFFFFFF&\\1a&H00&\\fs%.1f}%s",
+            x0 + box + 14 * k, y0 + box / 2, fs, ass_text(c.label))
+        modal.check_rect = {x0 - 10 * k, y0 - 10 * k, x0 + box + 14 * k + label_w + 10 * k, y0 + box + 10 * k}
+        y = y + box + 34 * k
+    end
     local n = #spec.choices
     local bw, bh, gap = (spec.button_w or 240) * k, 84 * k, 36 * k
     local x = w / 2 - (n * bw + (n - 1) * gap) / 2
@@ -2287,13 +2307,20 @@ local function open_modal(spec)
     bind("ENTER", function() local i = modal.sel; close_modal(); spec.done(i) end)
     bind("KP_ENTER", function() local i = modal.sel; close_modal(); spec.done(i) end)
     bind("LEFT", move(-1)); bind("RIGHT", move(1)); bind("TAB", move(1)); bind("Shift+TAB", move(-1))
+    local function toggle() spec.check.on = not spec.check.on; draw_modal() end
+    if spec.check then
+        for _, key in ipairs(spec.check.keys or {}) do bind(key, toggle) end
+    end
     local function over(m)   -- the button under the pointer
         for i, r in ipairs(modal.rects) do
             if m and m.x >= r[1] and m.x <= r[3] and m.y >= r[2] and m.y <= r[4] then return i end
         end
     end
     local function click()
-        local i = over(mp.get_property_native("mouse-pos"))
+        local m = mp.get_property_native("mouse-pos")
+        local c = modal.check_rect
+        if c and m and m.x >= c[1] and m.x <= c[3] and m.y >= c[2] and m.y <= c[4] then return toggle() end
+        local i = over(m)
         if i then close_modal(); spec.done(i) end
     end
     modal_hover = function(m)
@@ -2732,7 +2759,7 @@ local function show_result(r)
         lines = lines,
         choices = {{label = "OK", keys = {"o", "O", "y", "Y", "SPACE"}}},
         default = 1, cancel = 1,
-        done = function() if res.done then res.done() else render(true) end end,
+        done = function() if res.done then res.done(res.ok) else render(true) end end,
     })
 end
 
@@ -2743,7 +2770,7 @@ local function save_review(done)
     if not r or review_busy then return end
     local changes = review_changes(r)
     if #changes == 0 then
-        if done then done() else osd("nothing to save", 1.5) end
+        if done then done(true) else osd("nothing to save", 1.5) end
         return
     end
     -- read it again and change only this session's shots; written in place
@@ -2818,16 +2845,28 @@ end
 
 local function open_review_prompt(r)
     local n = #review_changes(r)
+    local video = {label = "Also save an .mp4 of the review", on = false, keys = {"v", "V"}}
     open_modal({
         title = "Save changes?", title_fs = 96,
         lines = {string.format("%d shot%s chosen or marked this session.  Yes saves the choices and updates the folders.  " ..
                                "No forgets them.", n, n == 1 and "" or "s")},
         choices = {{label = "Yes", keys = {"y", "Y"}}, {label = "No", keys = {"n", "N"}},
                    {label = "Cancel", keys = {"c", "C"}}},
+        check = video,
         default = 2, cancel = 3,
-        hint = "Y  yes   ·   N  no   ·   C or Esc  cancel   ·   ← →  then Enter",
+        hint = "Y  yes   ·   N  no   ·   C or Esc  cancel   ·   V  video   ·   ← →  then Enter",
         done = function(i)
-            if i == 1 then save_review(function() mp.command("quit") end)
+            if i == 1 then
+                save_review(function(ok)
+                    -- the video of the rebuilt XML, beside it; only when the save went through
+                    if video.on and ok then
+                        export.xml = r.xml
+                        run_export(function() mp.command("quit") end)
+                    else
+                        if video.on then msg.warn("video not rendered: the save had a problem") end
+                        mp.command("quit")
+                    end
+                end)
             elseif i == 2 then mp.command("quit")
             else render(true) end
         end,
