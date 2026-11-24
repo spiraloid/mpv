@@ -64,7 +64,7 @@ Do this once per file type for `.jpg`, `.jpeg`, `.png`, `.mp4`, `.mp3`, `.wav`:
 
 If something's off:
 - **A console window flashes when you reject or restore a clip in a plain XML (Windows).** The file moves go through PowerShell, like Rename and Trash.
-- **"review not rebuilt: uv not found" on opening a review.** Install [uv](https://docs.astral.sh/uv/), or check the paths in `script-opts/shot_jump.conf`.
+- **"uv not found" or "could not start uv" on opening or saving a review.** Install [uv](https://docs.astral.sh/uv/). mpv started from the Finder, the Dock or the Start menu doesn't get your shell's PATH, so it also looks in the usual install folders (`~/.local/bin`, `~/.cargo/bin`, `/opt/homebrew/bin`, `/usr/local/bin`; on Windows `%USERPROFILE%\.local\bin`, `%USERPROFILE%\.cargo\bin`, WinGet's `Links`, scoop's `shims`). If uv lives elsewhere, set `review_runner=<full path to uv>` in `script-opts/shot_jump.conf`. The choices file is saved either way; save again once uv starts.
 - **No cuts found, or no `.xml` written.** Check step 1 for `scdet`. A clip with no cuts gets no `.xml`, by design.
 - **Leftover `mpv_shots_*.log` files in `%TEMP%` (or `$TMPDIR` on macOS) after quitting.** These are scan logs that should have been cleaned up.
 
@@ -207,7 +207,7 @@ If a script is missing or fails, the card says so, word for word, and the choice
 
 **Start and end frames: `Ctrl+S`.** On the first frame of a shot it saves `NN_start.png`, on the last frame `NN_end.png`: the clean video frame of the version showing, with no label or buttons. They go in the frames rung (the `C_` folder), in one new pass per mpv session, opened on the first save. A file that is already there is never replaced. On any other frame `Ctrl+S` takes the usual numbered snapshot.
 
-**Setting it up.** `script-opts/shot_jump.conf` names the review XML and the project's scripts, each as a path under the XML's folder plus arguments. They are run as `uv run --directory <xml folder> --script <path> <arguments>`, so the project needs [uv](https://docs.astral.sh/uv/) installed. Leave the commands empty to save the choices file and nothing more.
+**Setting it up.** `script-opts/shot_jump.conf` names the review XML and the project's scripts, each as a path under the XML's folder plus arguments. They are run as `uv run --directory <xml folder> --script <path> <arguments>`, so the project needs [uv](https://docs.astral.sh/uv/) installed (`review_runner` takes its full path when mpv can't find it). Leave the commands empty to save the choices file and nothing more.
 
 ### Plain XMLs: reject and restore
 

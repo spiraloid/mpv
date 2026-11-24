@@ -2336,45 +2336,60 @@ end
 
 -- running the project's scripts ------------------------------------------------
 
-local function find_runner()
-    local name = o.review_runner
-    if name:find("[/\\]") then return exists(name) and name or nil end
-    local exts = is_windows and {".exe", ".cmd", ".bat", ""} or {""}
+local tools = {}   -- running the project's scripts: args, run, run_async, failure, never_started
+do
+-- Every runner that could be the one, best first: a full path in review_runner;
+-- else review_runner on PATH; else the usual install folders (an app started
+-- from the Finder, the Dock or the Start menu has a short PATH).
+local function find_runners()
+    local name, out, seen = o.review_runner, {}, {}
+    local function add(p)
+        local key = is_windows and p:lower() or p
+        if not seen[key] then seen[key] = true; out[#out + 1] = p end
+    end
+    if name:find("[/\\]") then
+        if exists(name) then add(name) end
+        return out
+    end
+    local exts = is_windows and {".exe", ".cmd", ".bat"} or {""}
     local function try(dir)
+        if dir == "" then return end
+        dir = dir:gsub('^"(.*)"$', "%1")
         for _, ext in ipairs(exts) do
             local p = utils.join_path(dir, name .. ext)
             local info = utils.file_info(p)
-            if info and info.is_file then return p end
+            if info and info.is_file then add(p) end
         end
     end
-    for dir in (os.getenv("PATH") or ""):gmatch(is_windows and "[^;]+" or "[^:]+") do
-        local p = try(dir)
-        if p then return p end
+    for dir in (os.getenv("PATH") or ""):gmatch(is_windows and "[^;]+" or "[^:]+") do try(dir) end
+    local home = os.getenv("HOME") or ""
+    local dirs
+    if is_windows then
+        local prof, appl = os.getenv("USERPROFILE") or home, os.getenv("LOCALAPPDATA") or ""
+        dirs = {prof .. "\\.local\\bin", prof .. "\\.cargo\\bin", appl .. "\\Microsoft\\WinGet\\Links",
+                prof .. "\\scoop\\shims", appl .. "\\Programs\\uv", appl .. "\\uv"}
+    else
+        dirs = {home .. "/.local/bin", home .. "/.cargo/bin", "/opt/homebrew/bin", "/usr/local/bin"}
     end
-    -- an app started from the Finder or a shortcut has a short PATH
-    local home = os.getenv("HOME") or os.getenv("USERPROFILE") or ""
-    local dirs = is_windows and {home .. "\\.local\\bin", home .. "\\.cargo\\bin"}
-        or {home .. "/.local/bin", home .. "/.cargo/bin", "/opt/homebrew/bin", "/usr/local/bin"}
-    for _, dir in ipairs(dirs) do
-        local p = try(dir)
-        if p then return p end
-    end
-    return nil
+    for _, dir in ipairs(dirs) do try(dir) end
+    return out
 end
 
--- "path/under/root.py arg arg" -> the argument list to run it, or nil and why not.
--- mpv can't set a subprocess's working folder, so the runner is told the folder.
+local RUNNER_HELP = "set review_runner in script-opts/shot_jump.conf to its full path"
+
+-- "path/under/root.py arg arg" -> {script, args...} to hand to the runner, or nil
+-- and why not. mpv can't set a subprocess's working folder, so the runner is
+-- told the folder.
 local function tool_args(root, cmd)
     local parts = {}
     for w in cmd:gmatch("%S+") do parts[#parts + 1] = w end
     if #parts == 0 then return nil, "no script configured" end
     local script = utils.join_path(root, native_seps(parts[1]))
     if not exists(script) then return nil, parts[1] .. " not found" end
-    local runner = find_runner()
-    if not runner then return nil, o.review_runner .. " not found" end
-    local args = {runner, "run", "--directory", root, "--script", script}
-    for i = 2, #parts do args[#args + 1] = parts[i] end
-    return args
+    if #find_runners() == 0 then return nil, o.review_runner .. " not found: " .. RUNNER_HELP end
+    local tail = {"run", "--directory", root, "--script", script}
+    for i = 2, #parts do tail[#tail + 1] = parts[i] end
+    return tail
 end
 
 -- The environment for a script: this one's, with the usual tool folders on PATH
@@ -2386,7 +2401,7 @@ local function tool_env(runner)
     local found = false
     for i, kv in ipairs(env) do
         local k, v = kv:match("^([^=]*)=(.*)$")
-        if k and k:upper() == "PATH" then
+        if k and k ~= "" and k:upper() == "PATH" and not found then
             env[i] = k .. "=" .. v .. sep .. table.concat(extra, sep)
             found = true
         end
@@ -2395,9 +2410,64 @@ local function tool_env(runner)
     return env
 end
 
-local function tool_spec(args)
-    return {name = "subprocess", args = args, env = tool_env(args[1]), playback_only = false,
-            capture_stdout = true, capture_stderr = true}
+-- The ways to start it, in order: each runner with the widened PATH, then as
+-- mpv's own environment has it. A start that fails (status below 0: the
+-- process never ran) moves on to the next way.
+local function tool_tries(tail)
+    local tries = {}
+    for _, runner in ipairs(find_runners()) do
+        local args = {runner}
+        for _, a in ipairs(tail) do args[#args + 1] = a end
+        tries[#tries + 1] = {name = "subprocess", args = args, env = tool_env(runner), playback_only = false,
+                             capture_stdout = true, capture_stderr = true}
+        tries[#tries + 1] = {name = "subprocess", args = args, playback_only = false,
+                             capture_stdout = true, capture_stderr = true}
+    end
+    return tries
+end
+
+local function never_started(res) return not res or (res.status or 0) < 0 end
+
+-- run it, waiting: the result of the first start that ran, else the last failure
+local function tool_run(tail)
+    local res
+    for _, spec in ipairs(tool_tries(tail)) do
+        res = mp.command_native(spec)
+        if not never_started(res) then return res end
+        msg.warn("could not start " .. spec.args[1] .. ": " .. tostring(res and res.error_string))
+    end
+    return res
+end
+
+-- the same without waiting: done(res) once it has run, or every start failed
+local function tool_run_async(tail, done)
+    local tries = tool_tries(tail)
+    local function go(i, last)
+        local spec = tries[i]
+        if not spec then return done(last) end
+        mp.command_native_async(spec, function(success, res)
+            res = success and res or {status = -1, error_string = tostring(res)}
+            if never_started(res) then
+                msg.warn("could not start " .. spec.args[1] .. ": " .. tostring(res.error_string))
+                return go(i + 1, res)
+            end
+            done(res)
+        end)
+    end
+    go(1, nil)
+end
+
+-- what went wrong when it didn't run cleanly, for the card
+local function tool_failure(res)
+    if not res then return "could not start " .. o.review_runner .. ": " .. RUNNER_HELP end
+    if (res.status or 0) < 0 then
+        return "could not start " .. o.review_runner .. " (" .. tostring(res.error_string or res.status) .. "): " .. RUNNER_HELP
+    end
+    return "exit " .. tostring(res.status)
+end
+
+tools.args, tools.run, tools.run_async = tool_args, tool_run, tool_run_async
+tools.failure, tools.never_started = tool_failure, never_started
 end
 
 -- ok, what the script printed (when it failed, its errors too)
@@ -2665,17 +2735,17 @@ local function save_review(done)
         local cmd = cmds[i]
         if not cmd then return finish() end
         local label = name_of((cmd:match("^%S+")))
-        local args, why = tool_args(r.root, cmd)
+        local args, why = tools.args(r.root, cmd)
         if not args then
             all_ok = false
             report[#report + 1] = label .. " not run: " .. why
             return step(i + 1)
         end
-        mp.command_native_async(tool_spec(args), function(success, res)
-            local ok, lines = tool_result(success and res or nil)
+        tools.run_async(args, function(res)
+            local ok, lines = tool_result(res)
             if not ok then
                 all_ok = false
-                report[#report + 1] = label .. " FAILED" .. (res and res.status and (" (exit " .. res.status .. ")") or "")
+                report[#report + 1] = label .. " FAILED: " .. tools.failure(res)
             end
             -- its last lines, and every warning wherever it was printed
             for j, line in ipairs(lines) do
@@ -2735,13 +2805,15 @@ review_open = function(xml_path)
     local r = {xml = xml_path, root = dir_of(xml_path), marks = {}, touched = {}, cleared = {}}
     reviews[xml_path] = r
     if o.review_open_cmd == "" then return end
-    local args, why = tool_args(r.root, o.review_open_cmd)
+    local args, why = tools.args(r.root, o.review_open_cmd)
     if not args then r.open_note = "review not rebuilt: " .. why; return end
     osd("building the review…", 30)
-    local ok, lines = tool_result(mp.command_native(tool_spec(args)))
+    local res = tools.run(args)
+    local ok, lines = tool_result(res)
     osd("", 0.1)
     if ok then msg.info("review rebuilt: " .. (lines[#lines] or ""))
-    else r.open_note = "review not rebuilt: " .. (lines[#lines] or "the script failed") end
+    elseif tools.never_started(res) then r.open_note = "review not rebuilt: " .. tools.failure(res)
+    else r.open_note = "review not rebuilt: " .. (lines[#lines] or tools.failure(res)) end
 end
 
 -- After the assembly has loaded: the saved choices, what each slot is really
