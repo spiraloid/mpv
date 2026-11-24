@@ -3175,7 +3175,7 @@ function notes.read_imported(r)
 end
 
 -- Seen: which versions someone has watched. A version counts as seen once it has
--- been on screen for 0.4 s in a review, and the editor's mpv records it in
+-- been on screen (drawn, about a quarter second) in a review, and the editor's mpv records it in
 -- <shots>/seen.json ({"since", "files": {path: {"at", "by"}}}, written in place a
 -- few seconds later). Files older than "since" (when the file was first made)
 -- count as seen, so only generations made after it can be new. A shot with
@@ -3278,7 +3278,7 @@ function notes.seen_tick()
     if not rel then notes.watch = nil; return end
     local w = notes.watch
     if not w or w.rel ~= rel then notes.watch = {rel = rel, t = mp.get_time()}; return end
-    if mp.get_time() - w.t >= 0.4 and r.seen.files[rel] == nil then
+    if mp.get_time() - w.t >= 0.2 and r.seen.files[rel] == nil then   -- drawn: seen
         r.seen.files[rel] = {at = os.time(), by = notes.reviewer(r)}
         -- a slot playing a copy (a final) shows its original: both count as seen
         local play = shot.play and rel_file(r, shot.play)
