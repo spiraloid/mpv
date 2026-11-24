@@ -1420,6 +1420,22 @@ local function label_events(events, shot, vx0, vy0, vw, vh, k)
         events[#events + 1] = string.format("{\\an3\\pos(%.1f,%.1f)%s\\1c&H%s&\\fs%.1f\\fscx%d}%s",
             x, yd, style, COLORS.white, L.fs_small * k, L.sx_small, ass_text(detail))
     end
+    -- versions of this shot nobody has looked at yet: a green smile-plus over the label
+    local unseen = B.unseen and B.unseen(shot) or 0
+    if unseen > 0 and not missing and B.icon_path then
+        local size = 34 * k
+        local s = size / 24
+        local ix = x - size
+        local iy = vy0 + vh - (L.baseline + L.detail_gap + 26) * k - size
+        events[#events + 1] = string.format(
+            "{\\an7\\pos(0,0)\\p1\\bord%.2f\\shad0\\1a&HFF&\\3c&H000000&\\3a&H50&}%s{\\p0}",
+            2.2 * s, B.icon_path("smile-plus", ix, iy, s))
+        events[#events + 1] = string.format(
+            "{\\an7\\pos(0,0)\\p1\\bord%.2f\\shad0\\1a&HFF&\\3c&H50C84C&\\3a&H00&}%s{\\p0}",
+            1.1 * s, B.icon_path("smile-plus", ix, iy, s))
+        events[#events + 1] = string.format("{\\an6\\pos(%.1f,%.1f)%s\\1c&H50C84C&\\fs%.1f}%s",
+            ix - 8 * k, iy + size / 2, style, L.fs_small * k, unseen == 1 and "1 new" or (unseen .. " new"))
+    end
 end
 
 -- Lucide icons (lucide.dev, lucide-static 0.460.0, ISC license): 24x24 grid,
@@ -1477,6 +1493,22 @@ do  -- star: five points, closed, centred on the 24x24 grid
     end
     ICONS["star"] = {pts}
 end
+
+do  -- smile-plus (lucide): a face with a gap at the top right for a plus
+    local arc = {}
+    for i = 0, 46 do
+        local a = math.rad(i * 6)          -- 0 .. 276 degrees, clockwise from the right
+        arc[#arc + 1] = 12 + 10 * math.cos(a)
+        arc[#arc + 1] = 12 + 10 * math.sin(a)
+    end
+    local smile = {}
+    for i = 0, 8 do
+        local u = i / 8                    -- M8 14 s1.5 2 4 2 4-2 4-2, as one curve
+        smile[#smile + 1] = 8 + 8 * u
+        smile[#smile + 1] = 14 + 2 * math.sin(math.pi * u)
+    end
+    ICONS["smile-plus"] = {arc, smile, {9, 9, 9.2, 9}, {15, 9, 15.2, 9}, {16, 5, 22, 5}, {19, 2, 19, 8}}
+end
 local STAR = {on = "00C8FF", off = "A0A0A0"}   -- ASS is BGR: yellow #FFC800, gray
 
 local function scaled(pts, x0, y0, s)
@@ -1509,6 +1541,7 @@ local function icon_path(name, x0, y0, s)
     end
     return table.concat(out, " ")
 end
+B.icon_path = icon_path   -- for the label, drawn by code above this
 
 local function circle_path(cx, cy, r)
     local c = 0.5523 * r
@@ -3137,6 +3170,97 @@ function notes.read_imported(r)
     return out
 end
 
+-- Seen: which versions someone has watched. A version counts as seen once it has
+-- been on screen for a second in a review, and the editor's mpv records it in
+-- <shots>/seen.json ({"since", "files": {path: {"at", "by"}}}, written in place a
+-- few seconds later). Files older than "since" (when the file was first made)
+-- count as seen, so only generations made after it can be new. A shot with
+-- versions nobody has seen shows a green smile-plus and "N new" over its label.
+function notes.seen_path(r) return utils.join_path(native_seps(r.shots), "seen.json") end
+
+function notes.seen_write(r)
+    local j = utils.parse_json(read_file(notes.seen_path(r)) or "")
+    if type(j) == "table" and type(j.files) == "table" then   -- keep whatever is there
+        for f, v in pairs(j.files) do if r.seen.files[f] == nil then r.seen.files[f] = v end end
+        r.seen.since = math.min(r.seen.since, tonumber(j.since) or r.seen.since)
+    end
+    local keys, rows = {}, {}
+    for f in pairs(r.seen.files) do keys[#keys + 1] = f end
+    table.sort(keys)
+    for _, f in ipairs(keys) do
+        local v = type(r.seen.files[f]) == "table" and r.seen.files[f] or {}
+        rows[#rows + 1] = string.format('  %s: {"at": %d, "by": %s}', json_str(f), tonumber(v.at) or 0, json_str(tostring(v.by or "")))
+    end
+    write_file(notes.seen_path(r), string.format('{\n "since": %d,\n "files": {\n%s\n }\n}\n',
+        r.seen.since, table.concat(rows, ",\n")))
+end
+
+function notes.seen_load(r)
+    local j = utils.parse_json(read_file(notes.seen_path(r)) or "")
+    if type(j) == "table" and type(j.files) == "table" then
+        r.seen = {since = tonumber(j.since) or 0, files = j.files}
+    else
+        r.seen = {since = os.time(), files = {}}   -- from now on: what exists already counts as seen
+        if not r.preview then notes.seen_write(r) end
+    end
+end
+
+-- the versions of each shot nobody has seen (originals, as Up / Down lists them)
+function notes.unseen_scan(r)
+    r.unseen = {}
+    local cache = {}
+    for _, shot in ipairs(state.shots or {}) do
+        if shot.rung and shot.num and not r.unseen[shot.num] then
+            local u = {}
+            for _, v in ipairs(shot_history(shot_versions(shot.rung.shots, shot.rung.nn, cache), nil)) do
+                -- generations only: no plates, nothing retired (copies are already left out)
+                local rel = rel_file(r, v.path)
+                if rel and v.letter >= "C" and not v.retired and r.seen.files[rel] == nil
+                   and (v.mtime or 0) > r.seen.since then u[rel] = true end
+            end
+            r.unseen[shot.num] = u
+        end
+    end
+end
+
+B.unseen = function(shot)
+    local r = current_review and current_review()
+    if not r or not r.unseen or not shot.num then return 0 end
+    local n = 0
+    for _ in pairs(r.unseen[shot.num] or {}) do n = n + 1 end
+    return n
+end
+
+-- every half second: what's on screen, and for how long
+function notes.seen_tick()
+    local r = current_review()
+    notes.ticks = (notes.ticks or 0) + 1
+    if r and r.seen and notes.seen_dirty and notes.ticks % 6 == 0 then
+        notes.seen_dirty = false
+        notes.seen_write(r)
+    end
+    if not r or r.preview or not r.seen or review_busy or export.prompting then notes.watch = nil; return end
+    local shot = current_shot()
+    local f = shot and shot.rung and (shot.file or shot.play)
+    local rel = f and rel_file(r, f)
+    if not rel then notes.watch = nil; return end
+    local w = notes.watch
+    if not w or w.rel ~= rel then notes.watch = {rel = rel, t = mp.get_time()}; return end
+    if mp.get_time() - w.t >= 1.0 and r.seen.files[rel] == nil then
+        r.seen.files[rel] = {at = os.time(), by = notes.reviewer(r)}
+        -- a slot playing a copy (a final) shows its original: both count as seen
+        local play = shot.play and rel_file(r, shot.play)
+        if play and play ~= rel and r.seen.files[play] == nil then r.seen.files[play] = r.seen.files[rel] end
+        if r.unseen and r.unseen[shot.num] then r.unseen[shot.num][rel] = nil end
+        notes.seen_dirty = true
+        render(true)
+    end
+end
+mp.register_event("shutdown", function()
+    local r = current_review()
+    if r and r.seen and notes.seen_dirty and not r.preview then notes.seen_write(r) end
+end)
+
 function notes.shot_for(num)
     for i, s in ipairs(state.shots or {}) do if s.num == num then return s, i end end
 end
@@ -3518,6 +3642,7 @@ local function save_review(done)
     end
     r.base, r.marks, r.touched, r.cleared, r.notes, r.by = read_selects(r), {}, {}, {}, {}, {}
     r.base_imported, r.session_imported = imported, {}
+    r.rescan = true   -- the scripts may have made new versions
     local report = {string.format("%s: %d shot%s changed", name_of(selects_path(r)), #changes, #changes == 1 and "" or "s")}
     msg.info("review saved: " .. selects_path(r))
 
@@ -3671,6 +3796,10 @@ review_loaded = function(asm)
         end
     end
     if not r.base then r.base = read_selects(r); r.base_imported = notes.read_imported(r) end
+    -- seen versions: read once, and the shots' unseen ones on the first load and after a save
+    if not r.seen then notes.seen_load(r) end
+    if not r.unseen or r.rescan then r.rescan = nil; notes.unseen_scan(r) end
+    if not notes.seen_timer then notes.seen_timer = mp.add_periodic_timer(0.5, function() notes.seen_tick() end) end
     local cache = {}
     for _, shot in ipairs(asm.shots) do
         if shot.rung and shot.play then
