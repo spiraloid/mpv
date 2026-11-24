@@ -2178,6 +2178,9 @@ local function version_step(dir)
     end
     local f = list[k]
     browse = {idx = shot.idx, path = f.path}
+    -- stepping onto a version is seeing it, even when the keys go faster than it
+    -- can be drawn (held down, or pressed quickly)
+    if B.mark_seen then B.mark_seen(shot, f.path) end
     -- playing: stop on the swapped shot's first frame, so the swap is seen and the
     -- next press lands on the same shot
     local pos
@@ -3289,19 +3292,36 @@ function notes.seen_tick()
     if not rel then notes.watch = nil; return end
     local w = notes.watch
     if not w or w.rel ~= rel then notes.watch = {rel = rel, t = mp.get_time()}; return end
-    if mp.get_time() - w.t >= 0.2 and r.seen.files[rel] == nil then   -- drawn: seen
-        r.seen.files[rel] = {at = os.time(), by = notes.reviewer(r)}
+    if mp.get_time() - w.t >= 0.2 then   -- drawn: seen
         -- a slot playing a copy (a final) shows its original: both count as seen
-        local play = shot.play and rel_file(r, shot.play)
-        if play and play ~= rel and r.seen.files[play] == nil then r.seen.files[play] = r.seen.files[rel] end
-        local u = r.unseen and r.unseen[shot.num]
-        if u then   -- the picture is seen: every copy of it too
-            local g = u[rel] or (play and u[play])
-            if g then for f, x in pairs(u) do if x == g then u[f] = nil end end end
-        end
-        notes.seen_dirty = true
-        render(true)
+        notes.mark_seen(r, shot.num, rel, shot.play and rel_file(r, shot.play))
     end
+end
+
+-- record a version as seen, and take its picture (every copy of it) off the shot's new count
+function notes.mark_seen(r, num, rel, also)
+    if not r or r.preview or not r.seen or not rel then return end
+    local changed = false
+    for _, f in ipairs({rel, also}) do
+        if f and r.seen.files[f] == nil then
+            r.seen.files[f] = {at = os.time(), by = notes.reviewer(r)}
+            changed = true
+        end
+    end
+    local u = r.unseen and r.unseen[num]
+    if u then
+        local g = u[rel] or (also and u[also])
+        if g then
+            for f, x in pairs(u) do if x == g then u[f] = nil end end
+            changed = true
+        end
+    end
+    if changed then notes.seen_dirty = true; render(true) end
+end
+
+B.mark_seen = function(shot, path)   -- for Up / Down, defined above this
+    local r = current_review()
+    if r and shot and shot.num then notes.mark_seen(r, shot.num, rel_file(r, path)) end
 end
 mp.register_event("shutdown", function()
     local r = current_review()
