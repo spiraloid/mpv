@@ -1500,10 +1500,25 @@ local function row_events(events, list, vx0, vy0, vw, k)
     local w, h = ROW.slot * k, B.size * k
     local x = vx0 + (vw - #list * w) / 2
     local y = vy0 + B.top * k
+    -- each button takes its whole slot, from the top of the picture to a little
+    -- under the label, so a click near the word lands; under the mouse a faint
+    -- backdrop shows how far it reaches
+    local hy0, hy1 = vy0, y + h + 22 * k
     for _, b in ipairs(list) do
         local hot = hovered == b.name
         local col = b.lit and b.color or (hot and "FFFFFF" or STAR.off)
         local cx, cy = x + w / 2, y + h / 2
+        if hot then
+            local x0, x1, r = x + 10 * k, x + w - 10 * k, 12 * k
+            events[#events + 1] = string.format(
+                "{\\an7\\pos(0,0)\\p1\\bord0\\shad0\\1c&H000000&\\1a&H90&}" ..
+                "m %.1f %.1f l %.1f %.1f b %.1f %.1f %.1f %.1f %.1f %.1f l %.1f %.1f b %.1f %.1f %.1f %.1f %.1f %.1f " ..
+                "l %.1f %.1f b %.1f %.1f %.1f %.1f %.1f %.1f l %.1f %.1f b %.1f %.1f %.1f %.1f %.1f %.1f{\\p0}",
+                x0 + r, hy0 + 6 * k, x1 - r, hy0 + 6 * k, x1, hy0 + 6 * k, x1, hy0 + 6 * k, x1, hy0 + 6 * k + r,
+                x1, hy1 - r, x1, hy1, x1, hy1, x1 - r, hy1,
+                x0 + r, hy1, x0, hy1, x0, hy1, x0, hy1 - r,
+                x0, hy0 + 6 * k + r, x0, hy0 + 6 * k, x0, hy0 + 6 * k, x0 + r, hy0 + 6 * k)
+        end
         local fs = ROW.fs * k
         local text_w = #b.text * fs * 0.37              -- near enough for centring
         local tx = cx
@@ -1534,7 +1549,7 @@ local function row_events(events, list, vx0, vy0, vw, k)
                 1 * k, col, cx - bw / 2, cy + fs * 0.75, cx + bw / 2, cy + fs * 0.75,
                 cx + bw / 2, cy + fs * 0.75 + ROW.bar * k, cx - bw / 2, cy + fs * 0.75 + ROW.bar * k)
         end
-        buttons[#buttons + 1] = {name = b.name, x0 = x, y0 = y, x1 = x + w, y1 = y + h, enabled = true}
+        buttons[#buttons + 1] = {name = b.name, x0 = x, y0 = hy0, x1 = x + w, y1 = hy1, enabled = true}
         x = x + w
     end
     if list.note and list.note ~= "" then   -- the shot's note, under the row
