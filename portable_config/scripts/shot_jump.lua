@@ -35,6 +35,7 @@ local o = {
     review_runner = "uv",
     review_open_cmd = "",
     review_save_cmds = "",
+    review_reviewers = "",   -- under the XML's folder: {"logins": {login: name}}
 }
 options.read_options(o, "shot_jump")
 
@@ -1556,6 +1557,11 @@ local function row_events(events, list, vx0, vy0, vw, k)
                 "{\\an7\\pos(0,0)\\p1\\bord%.2f\\shad0\\1c&H%s&\\1a&H00&\\3c&H000000&\\3a&H60&}m %.1f %.1f l %.1f %.1f l %.1f %.1f l %.1f %.1f{\\p0}",
                 1 * k, col, cx - bw / 2, cy + fs * 0.75, cx + bw / 2, cy + fs * 0.75,
                 cx + bw / 2, cy + fs * 0.75 + ROW.bar * k, cx - bw / 2, cy + fs * 0.75 + ROW.bar * k)
+            if list.by then   -- who set it, small, after the label
+                events[#events + 1] = string.format(
+                    "{\\an4\\pos(%.1f,%.1f)\\bord%.2f\\shad0\\q2\\3c&H000000&\\3a&H50&\\1c&HD0D0D0&\\1a&H00&\\fs%.1f}·  %s",
+                    cx + bw / 2 + 8 * k, cy + 2 * k, 1.5 * k, 21 * k, ass_text(list.by))
+            end
         end
         buttons[#buttons + 1] = {name = b.name, x0 = x, y0 = hy0, x1 = x + w, y1 = hy1, enabled = true}
         x = x + w
@@ -1776,6 +1782,17 @@ end
 -- click, so near the buttons the controller is told to stay hidden, and the
 -- click binding is put back on top once it has let go.
 local osc_hidden = false
+-- mpv drags the window when the pointer moves a few pixels with the button held,
+-- and a click that turned into a drag never reaches a button. Over a button, and
+-- while a prompt is up, the window doesn't drag.
+local drag = {holds = {}}
+function drag.hold(why, on)
+    if on and not next(drag.holds) then drag.was = mp.get_property("window-dragging") end
+    drag.holds[why] = on or nil
+    if next(drag.holds) then mp.set_property("window-dragging", "no")
+    elseif drag.was then mp.set_property("window-dragging", drag.was); drag.was = nil end
+end
+
 local function hide_osc(on)
     if on == osc_hidden then return end
     osc_hidden = on
@@ -1805,6 +1822,7 @@ update_hover = function(m)
         near = m.x >= x0 - pad and m.x <= x1 + pad and m.y <= y1 + pad
     end
     hide_osc(near)
+    drag.hold("button", h ~= nil)
     set_click_binding(h ~= nil)
     if h ~= hovered then hovered = h; render() end
 end
@@ -1838,10 +1856,10 @@ local function ass_header(w, h)
 end
 
 -- ── Up / Down: a shot's history ───────────────────────────────────────────────
--- Every version of the shot on screen: the final at the bottom, then each rung
--- from the top down (candidates, drivers, run candidates, runs), newest pass
--- first with that rung's retired takes under its live ones, and the cleaned
--- plate at the top. Up swaps the next older one into the slot, Down the next
+-- Every version of the shot on screen: the final at the bottom, the cleaned
+-- plate at the top, and in between every run, run candidate, driver and
+-- candidate in the order it was made (file time), so the shot's progression
+-- reads in order. Up swaps the next older one into the slot, Down the next
 -- newer; the ends stop. The swap is held in memory (picks): nothing is written,
 -- the XML included. A review saves the choice (see "review").
 
@@ -1917,7 +1935,14 @@ local function shot_history(rows, keep)
             list[#list + 1] = r
         end
     end
+    -- the plates first and the final last; everything made in between (runs,
+    -- run candidates, drivers, candidates) in the order it was made, so a
+    -- driver follows the take it came from and the rolls it led to follow it
+    local function band(r) return r.letter < "C" and 0 or (r.letter >= "K" and 2 or 1) end
     table.sort(list, function(a, b)
+        local ba, bb = band(a), band(b)
+        if ba ~= bb then return ba < bb end
+        if ba == 1 and a.mtime ~= b.mtime then return a.mtime < b.mtime end
         if a.letter ~= b.letter then return a.letter < b.letter end
         if a.retired ~= b.retired then return a.retired end        -- retired sits under the live ones
         if a.pass ~= b.pass then return a.pass < b.pass end
@@ -1938,6 +1963,7 @@ local function choose_version(asm, shot, path, note, pos)
         -- a new select: the state and note were about the file before it, and
         -- stepping back to that file doesn't bring them back
         r.marks[shot.num], r.notes[shot.num] = {file = slash(path), mark = false}, ""
+        r.by = r.by or {}; r.by[shot.num] = false
     elseif o.review_xml ~= "" then
         note = note .. "   (not saved: open " .. o.review_xml .. " to choose)"
     end
@@ -2310,6 +2336,7 @@ local function draw_modal()
 end
 
 local function close_modal()
+    drag.hold("prompt", false)
     modal.spec = nil
     export.prompting = false
     modal_overlay:remove()
@@ -2319,6 +2346,7 @@ local function close_modal()
 end
 
 local function open_modal(spec)
+    drag.hold("prompt", true)
     modal.spec = spec
     modal.sel = spec.default or 1
     export.prompting = true
@@ -2582,7 +2610,8 @@ local function read_selects(r)
         for num, e in pairs(t.shots) do
             if type(e) == "table" and type(e.file) == "string" then
                 out[tostring(num)] = {file = e.file, mark = type(e.mark) == "string" and e.mark or nil,
-                                      note = type(e.note) == "string" and e.note or ""}
+                                      note = type(e.note) == "string" and e.note or "",
+                                      by = type(e.by) == "string" and e.by or nil}
             end
         end
     end
@@ -2612,8 +2641,9 @@ local function selects_text(shots)
     local rows = {}
     for _, num in ipairs(nums) do
         local e = shots[num]
-        rows[#rows + 1] = string.format('  %s: {"file": %s, "mark": %s, "note": %s}', json_str(num),
-            json_str(e.file), e.mark and json_str(e.mark) or "null", json_str(e.note or ""))
+        rows[#rows + 1] = string.format('  %s: {"file": %s, "mark": %s, "note": %s%s}', json_str(num),
+            json_str(e.file), e.mark and json_str(e.mark) or "null", json_str(e.note or ""),
+            e.by and (', "by": ' .. json_str(e.by)) or "")
     end
     return string.format('{\n "saved": %s,\n "by": %s,\n "shots": {\n%s\n }\n}\n',
         json_str(os.date("!%Y-%m-%dT%H:%M:%SZ")),
@@ -2772,6 +2802,34 @@ function notes.of(r, num)
     return b and b.note or ""
 end
 
+-- Who is reviewing on this computer: the login, lowercased, looked up in the
+-- project's reviewers file (review_reviewers: {"logins": {login: name}}); a
+-- login not listed is used as it is.
+function notes.reviewer(r)
+    if r.reviewer then return r.reviewer end
+    local login = (os.getenv("USER") or os.getenv("USERNAME") or "someone"):lower()
+    local name = login
+    if o.review_reviewers ~= "" then
+        local text = read_file(utils.join_path(r.root, native_seps(o.review_reviewers)))
+        local j = text and utils.parse_json(text)
+        if type(j) == "table" and type(j.logins) == "table" and type(j.logins[login]) == "string" then
+            name = j.logins[login]
+        end
+    end
+    r.reviewer = name
+    return name
+end
+
+-- Who set the shot's state or note: this session's reviewer once they touch it,
+-- nobody once the state and note are gone, else the saved name
+function notes.by_of(r, num)
+    if r.by and r.by[num] ~= nil then return r.by[num] or nil end
+    local b = r.base and r.base[num]
+    return b and b.by or nil
+end
+
+function notes.touch(r, num) r.by = r.by or {}; r.by[num] = notes.reviewer(r) end
+
 -- The note box: drawn under the state row (mpv's own input line sits at the
 -- bottom, under the playback controls), pre-filled with the shot's note. Enter
 -- keeps the text, Esc leaves the note as it was. While it's open every key types.
@@ -2795,6 +2853,7 @@ function notes.close(keep)
         if text ~= notes.of(b.r, b.num) then
             b.r.notes[b.num] = text
             b.r.touched[b.num], b.r.cleared[b.num] = true, nil
+            notes.touch(b.r, b.num)
         end
     end
     render(true)
@@ -2850,7 +2909,7 @@ review_buttons = function(shot)
     if not r or review_busy or not shot.rung or not shot.num or shot.missing or shot.retired then return nil end
     if r.preview then return {row = true, preview = "PREVIEW  ·  " .. lock.who(r.preview) .. "  ·  nothing can be saved"} end
     local cur = mark_of(r, shot)
-    local list = {row = true, note = notes.of(r, shot.num)}
+    local list = {row = true, note = notes.of(r, shot.num), by = cur and notes.by_of(r, shot.num) or nil}
     local b = notes.box
     if b and b.num == shot.num then
         list.box = {num = b.num, before = table.concat(b.chars, "", 1, b.pos),
@@ -2886,6 +2945,7 @@ local function set_mark(name)
     local file = slash(shot.file or shot.play)
     local new = mark_of(r, shot) ~= name and name or false
     r.marks[shot.num] = {file = file, mark = new}
+    notes.touch(r, shot.num)
     r.touched[shot.num], r.cleared[shot.num] = true, nil
     if not mp.get_property_bool("pause") then   -- the row is hidden while playing
         osd((shot.label or shot.name) .. "  ·  " .. (new and MARK_TEXT[new] or "state cleared"), 2)
@@ -2924,7 +2984,9 @@ local function review_entry(r, shot)
     -- never chosen and not marked: only a version other than the XML's own is a choice
     local note = notes.of(r, shot.num)
     if not b and not mark and note == "" and slash(file) == slash(shot.xml_orig or "") then return nil end
-    return {file = file, mark = mark, note = note}
+    -- who: only while there is a state or a note to answer for
+    local by = (mark or note ~= "") and notes.by_of(r, shot.num) or nil
+    return {file = file, mark = mark, note = note, by = by}
 end
 
 -- This session's shots whose entry differs from the saved one: {num, entry}
@@ -2938,7 +3000,7 @@ local function review_changes(r)
             local same
             if not e or not b then same = (e == nil and b == nil)
             else same = slash(abs_file(r, b.file)) == slash(e.file) and b.mark == e.mark
-                        and (b.note or "") == (e.note or "") end
+                        and (b.note or "") == (e.note or "") and b.by == e.by end
             if not same then out[#out + 1] = {num = num, entry = e} end
         end
     end
@@ -3010,12 +3072,12 @@ local function save_review(done)
         if c.entry and not rel then
             osd("not saved: " .. name_of(c.entry.file) .. " is outside " .. name_of(r.root), 4); return
         end
-        shots[c.num] = c.entry and {file = rel, mark = c.entry.mark, note = c.entry.note} or nil
+        shots[c.num] = c.entry and {file = rel, mark = c.entry.mark, note = c.entry.note, by = c.entry.by} or nil
     end
     if not write_file(selects_path(r), selects_text(shots)) then
         osd("could not write " .. name_of(selects_path(r)), 4); return
     end
-    r.base, r.marks, r.touched, r.cleared, r.notes = read_selects(r), {}, {}, {}, {}
+    r.base, r.marks, r.touched, r.cleared, r.notes, r.by = read_selects(r), {}, {}, {}, {}, {}
     local report = {string.format("%s: %d shot%s changed", name_of(selects_path(r)), #changes, #changes == 1 and "" or "s")}
     msg.info("review saved: " .. selects_path(r))
 
