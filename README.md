@@ -58,12 +58,13 @@ Do this once per file type for `.jpg`, `.jpeg`, `.png`, `.mp4`, `.mp3`, `.wav`:
 2. The config is in place: `shot_jump.lua` is in `%APPDATA%\mpv\scripts\` (winget) or `portable_config\scripts\` (portable).
 3. Open a video with a few cuts. Within a few seconds an `.xml` with the same name appears beside it, and `LEFT` / `RIGHT` jump cut to cut.
 4. Open an FCP7 `.xml` (drag it onto mpv). It plays as one edit with shot labels bottom-right. Arrows and the mouse wheel step shot to shot.
-5. Pause on a clip from a rung folder (e.g. `shots/I_candidates/`). Thumbs up / down buttons appear top-right. To try it safely, press thumbs down: the slot drops to the next file down the rungs. Then press the un-retire arrow: the clip comes straight back. Thumbs up copies the clip into `shots/K_final/`. Quit with `Esc` and answer **No** at the Save changes? prompt, and every file goes back where it was.
+5. Open a review XML in a folder of rung folders and pause on a shot. Four round mark buttons appear top-right. To try it safely, press `UP` to step to an older version and click a mark, then quit with `Esc` and answer **No** at the Save changes? prompt: nothing was written.
 6. Middle click drops to a quarter-size window top-left; middle click again returns to fullscreen.
 7. Press `h` for every key.
 
 If something's off:
-- **A console window flashes when you approve, reject or un-retire (Windows).** The file moves go through PowerShell, like Rename and Trash.
+- **A console window flashes when you reject or restore a clip in a plain XML (Windows).** The file moves go through PowerShell, like Rename and Trash.
+- **"review not rebuilt: uv not found" on opening a review.** Install [uv](https://docs.astral.sh/uv/), or check the paths in `script-opts/shot_jump.conf`.
 - **No cuts found, or no `.xml` written.** Check step 1 for `scdet`. A clip with no cuts gets no `.xml`, by design.
 - **Leftover `mpv_shots_*.log` files in `%TEMP%` (or `$TMPDIR` on macOS) after quitting.** These are scan logs that should have been cleaned up.
 
@@ -99,56 +100,16 @@ The playlist auto-filters to the same media type as the starting file (video / i
 |-----|--------|
 | `LEFT` / `RIGHT` | Previous / next shot, landing on its first frame. Frame step when the file has no known cuts |
 | `WHEEL_UP` / `WHEEL_DOWN` | Previous / next shot, one per notch (XML assembly) |
-| `a` | Approve the clip on screen. On a REJECTED slot, un-retire |
-| `r` | Reject the clip on screen. In a rung layout the slot falls back to the next file down |
-| `u` | Un-retire: bring back the shot's next newer retired version |
 | `UP` / `DOWN` | Step through the history of the shot on screen: `UP` older (to the cleaned plate), `DOWN` newer (to the final) |
+| `c` / `a` / `r` / `m` | Review: accept as candidate / accept as final / mark for re-roll / mark for comp. Press the lit one again to clear it |
+| `x` | Review: clear the shot's choice |
+| `Ctrl+Shift+S` (`Cmd+S`) | Review: save the choices and update the folders |
+| `Ctrl+S` | On a shot's first / last frame: save `NN_start.png` / `NN_end.png`. Any other frame: numbered snapshot |
+| `r` / `u` | Plain XML (no rung folders): reject the clip on screen / restore it |
 | `o` | Show / hide the shot label and buttons (outside an XML assembly: mpv's progress bar) |
 | `,` / `.` | Frame back / forward (mpv defaults) |
 
-`a`, `r`, `u` and `o` work while an FCP7 XML is playing as an assembly (see [Shot review](#shot-review) below). Quitting after a change asks **Save changes?**: Yes keeps it and renders a fresh video, No (the default) puts everything back, Cancel carries on.
-
-### Fullscreen
-
-| Key | Action |
-|-----|--------|
-| `f` | Toggle fullscreen |
-| `ENTER` | Toggle fullscreen |
-| `Alt+Enter` | Toggle fullscreen |
-| `Middle mouse` | Fullscreen → a window a quarter of the screen (half width × half height) in the top-left corner · click again → fullscreen |
-
-### Frame Workflow
-
-| Key | Action |
-|-----|--------|
-| `s` / `Alt+s` | Copy file to same folder, stripping `_attempt_##` suffix |
-| `\` | Toggle variant mode — show/hide `_attempt_##` files |
-| `Ctrl+RIGHT` | Shift current frame group forward (swap with next group) |
-| `Ctrl+LEFT` | Shift current frame group backward (swap with previous group) |
-| `DEL` | Move current file to Recycle Bin |
-| `F2` | Rename current file |
-
-### Capture & Clipboard
-
-| Key | Action |
-|-----|--------|
-| `Ctrl+s` | Save numbered PNG snapshot (`basename_001.png`, auto-increments) |
-| `Ctrl+c` | Copy current video frame to clipboard |
-
-### Folder & Selects
-
-| Key | Action |
-|-----|--------|
-| `Ctrl+n` | Jump to next sibling folder and load all its media |
-| `Ctrl+Enter` | Copy current file to `../selects/` |
-
-### Misc
-
-| Key | Action |
-|-----|--------|
-| `h` | Show / hide in-player help overlay |
-| `Ctrl+r` | Force playlist rebuild |
-| `ESC` | Quit |
+The review keys work only while a review XML is open (see [Shot review](#shot-review) below); `m` is mute everywhere else.
 
 ## Shot review
 
@@ -177,100 +138,105 @@ Drag an FCP7 `.xml` onto mpv (or open it like any file):
 - A label ending in `EDIT` (e.g. `22 EDIT`) draws gray.
 - A label ending in `MISSING PLATE` draws the number plus a large centred card over a red wash.
 - A clip with no `<comments>` gets no label.
-- A slot playing a fallback after a reject is labelled for what it actually shows (see below).
-- When a rung holds more than one version of the shot (live or retired), a small line above the label says which one is on screen: the file's date and its place among them, lowest pass first, e.g. `11-21 18:50 · 2 of 3`. The numbers stay put as you reject and un-retire. The label itself keeps the `NN stage PP` format.
+- A slot playing a version other than the one the XML names (an `UP` / `DOWN` choice, or a fallback because the named file is gone) is labelled for what it actually shows.
+- When a rung holds more than one version of the shot (live or retired), a small line above the label says which one is on screen: the file's date and its place among them, lowest pass first, e.g. `11-21 18:50 · 2 of 3`. In a review the same line carries the shot's mark and where copies of the file sit. The label itself keeps the `NN stage PP` format.
 
-### Checking the XML against the folders
+### Group review: one choices file
 
-The first time an XML is opened in a session, mpv checks it against the files on disk:
-- **Each slot:** its file is missing; it names a file that's been retired or moved and a fallback is playing; it's marked rejected while a version is back; or a newer version of the shot has appeared since the XML was last saved. A newer version means the newest live file in the highest rung that has one. One that already existed when the XML was saved was passed over on purpose (an `UP` / `DOWN` pick you kept), so it's only a note in the log, not a reason to regenerate.
-- **The XML's own structure:** gaps or overlaps between clips, a slot whose length disagrees with its in/out, and a sequence length that doesn't match the clips. These are notes.
-- **The folders:** run folders named on different clocks (their names then don't sort by time). This is a note.
+When the clips sit in a shots folder made of lettered **rungs**, the assembly becomes the review tool for that pipeline. The group steps through each shot's versions, picks the best state, says what should happen to it, and saves. mpv writes **one small file** and nothing else: it never moves, copies or renames a shot file, and it never edits the XML.
 
-If anything turns up that a regenerate would fix, a card lists it (everything also goes to the mpv log) with two choices:
+```
+review.xml                         <- what the group opens (rebuilt by the project's scripts)
+shots/
+  A_cropped_plates/07.mp4          <- bottom rung
+  B_cleaned_plates/07.mp4
+  C_frame_candidates/v.001/07_start.png
+  ...
+  F_runs/v.012/07.mp4              <- one pass per v.NNN folder
+  F_runs/v.013/07.mp4
+  ...
+  I_candidates/v.012/07.mp4
+  K_final/07.mp4                   <- top rung
+  selects.json                     <- the review's choices: the one file mpv saves
+```
 
-| Choice | Key | Does |
-|--------|-----|------|
-| **Regenerate XML** | `R` | Re-point only the slots the card lists, with matching labels: a slot whose file is gone keeps what's playing in its place, and a slot with a newer version since the last save gets that version. Picks you kept, timing, soundtrack and slots outside the rungs stay as they are. |
-| **Ignore** (default) | `I`, `Esc` or `Enter` | Play the XML as it is. |
+A shot's file is one named for its shot number: `07.mp4` or `07_v4.mp4`, anywhere inside a rung, in any video format. Empty stub files are ignored.
 
-Regenerating counts as a change: answer **No** when you quit and the XML goes back exactly as it was.
+**A shot's history: `UP` / `DOWN`.** `LEFT` / `RIGHT` move between shots; `UP` / `DOWN` move through every version of the shot you're on. `DOWN` all the way is the final, `UP` all the way is the cleaned plate, and the ends stop. In between, from the bottom: candidates, driver candidates, run candidates, runs. Within a rung the newest pass comes first (`v.002` is newer than `v.001`), with that rung's `retired/` takes under its live ones. The cropped plate under the cleaned one is left out unless it is all the shot has. A file that is only a copy of a lower one (a final copied from a candidate, a pick copied from a run) isn't listed twice: the original is shown, and the small line over the label says where copies of it sit (`in final`).
 
-### Approve, reject, un-retire
+Each press swaps that version into the slot, on the same frame, paused or playing, and a note shows where you are (`07 run 12 · 4 / 9`). The swap is held in memory: nothing is written until you save.
 
-Pause on a clip and round buttons appear top-right of the picture. They hide again when playback resumes. While the pointer is near them, mpv's own on-screen controls (including the minimize / maximize / close buttons a borderless window shows in that corner) stay hidden, so the click always reaches them. Click them or use the keys:
+**Four marks.** Pause on a shot and four round buttons appear top-right of the picture; hover one to read its name. One mark per shot, on the version showing. The lit button is the mark; press it again to clear it.
+
+| Button | Key | Means |
+|--------|-----|-------|
+| check | `c` | **Accept as candidate**: this take is good as it is. Only offered on a run or a candidate |
+| double check | `a` | **Accept as final**: approved |
+| rotate | `r` | **Mark for re-roll**: recirculate it into a new driver |
+| layers | `m` | **Mark for comp**: needs comp work |
+
+A shot can also have a chosen version with no mark. `x` clears a shot's choice altogether: its entry leaves the file on save and the project's own rule decides what plays.
+
+**Save: `Ctrl+Shift+S`** (`Cmd+S`), or Yes when you quit. mpv then:
+1. Reads `shots/selects.json` again, changes only the shots this session touched, and writes it in place.
+2. Runs the project's scripts (set in `script-opts/shot_jump.conf`), which apply the choices to the folders and rebuild the XML.
+3. Reloads the rebuilt XML and shows a card with the scripts' last lines, so the group sees what changed.
+
+If a script is missing or fails, the card says so, word for word, and the choices file stays saved.
+
+```json
+{
+ "saved": "2026-11-24T02:47:10Z",
+ "by": "name",
+ "shots": {
+  "07": {"file": "shots/F_runs/v.012/07.mp4", "mark": "candidate", "note": ""},
+  "21": {"file": "shots/I_candidates/v.009/21.mp4", "mark": null, "note": "keep the blink"}
+ }
+}
+```
+
+`file` is relative to the XML's folder and always names an original, never a copy. `mark` is `candidate`, `final`, `reroll`, `comp` or `null`. Only shots with a choice are listed, and a `note` already in the file is kept.
+
+**Opening.** The review XML is the one named by `review_xml` (default `review.xml`). Before it loads, mpv runs the project's build script so the XML matches the folders and the saved choices; every shot starts on its chosen version, with its mark lit. If the script can't run, mpv says why and plays the XML as it is.
+
+**Any other XML in the same folders** (a dated daily, say) is browse-only: `UP` / `DOWN` work, nothing is saved, and the note says to open the review XML to choose.
+
+**Quitting** with unsaved choices asks **Save changes?** Yes saves as above and then quits, No forgets the session's choices (nothing was written, so nothing needs undoing), Cancel carries on.
+
+**Start and end frames: `Ctrl+S`.** On the first frame of a shot it saves `NN_start.png`, on the last frame `NN_end.png`: the clean video frame of the version showing, with no label or buttons. They go in the frames rung (the `C_` folder), in one new pass per mpv session, opened on the first save. A file that is already there is never replaced. On any other frame `Ctrl+S` takes the usual numbered snapshot.
+
+**Setting it up.** `script-opts/shot_jump.conf` names the review XML and the project's scripts, each as a path under the XML's folder plus arguments. They are run as `uv run --directory <xml folder> --script <path> <arguments>`, so the project needs [uv](https://docs.astral.sh/uv/) installed. Leave the commands empty to save the choices file and nothing more.
+
+### Plain XMLs: reject and restore
+
+An XML whose clips aren't in a rung layout has no versions and no marks. Pause on a clip and a thumbs-down button appears top-right; while the pointer is near it, mpv's own on-screen controls stay hidden so they don't take the click.
 
 | Button | Key | Does |
 |--------|-----|------|
-| rotate-ccw (gray) | `u` | Un-retire: bring back the next newer retired version. Shown only when there is one |
-| thumbs-up | `a` | Approve: copy the clip to the finals. Solid with a filled thumb once the shot has a final |
-| thumbs-down | `r` | Reject: move the clip into a `retired/` folder. Grayed out when nothing is left to reject |
+| thumbs-down | `r` | Reject: move the clip to `retired/<its path relative to the XML>` beside the XML and mark it disabled in the XML. Its slot plays as a dark gray **REJECTED** clip, so nothing after it shifts |
+| rotate-ccw (gray) | `u` | Restore: put the clip back where it was and enable it again |
 
-Approve copies to a hidden `.NN.mp4.part` first and renames it only when complete, so a half-copied file never shows up as a final. `LEFT`/`RIGHT` stop on every slot, rejected ones included. A clip used more than once in the edit (e.g. an opening shot repeated at the end) can't be rejected outside a rung layout.
+`LEFT`/`RIGHT` stop on every slot, rejected ones included. A clip used more than once in the edit can't be rejected. The first time the XML changes, the original is kept beside it as `<name>.xml.bak`.
 
-### Hierarchical review: clearing out the rungs
+### Quitting a plain XML: Save changes? Yes / No / Cancel
 
-When the clips sit in a shots folder made of lettered **rungs**, the assembly becomes a review tool for that whole pipeline. You work your way down each shot's history from the player, and every reject clears a file out of the way. Rungs are subfolders named `<letter>_<stage>`: plates at the bottom, then everything built from them (frames, prompts, audio, runs, drivers, candidates, comps), up to finals at the top:
-
-```
-shots/
-  A_cropped_plates/07.mp4                 <- bottom rung
-  B_cleaned_plates/07.mp4
-  ...
-  F_runs/v.000/11-22__0701/07.mp4
-  F_runs/v.000/11-22__1242/07.mp4         <- newer run
-  ...
-  I_candidates/v.000/11-22__1300/07.mp4   <- what the XML plays
-  ...
-  K_final/                                <- top rung: approved shots
-```
-
-A shot's file is one named for its shot number: `07.mp4` or `07_v4.mp4`, anywhere inside a rung, in any video format. Drivers (`07_driver.mp4`), comp layers (`07_character.mov`), frames, prompts, audio and the masters in an `uncompressed/` folder don't count.
-
-**Reject walks down.** Reject moves the file on screen to `<its rung>/retired/<same path>`, and the slot plays the next file down:
-1. The newest remaining version of that shot in the same rung, by the file's modified date (when the take was written; copies keep it). Pass numbers and run folder names don't decide the order: passes can be uploaded out of order, and run folders get named on different clocks.
-2. When that rung has none left, the newest one in the next rung down.
-3. And so on, down to `A_`.
-
-Keep pressing `r` and you step back through the shot's history, from candidate, to the latest run, to the older run, to the cleaned plate, to the cropped plate. The label follows: it reads `07 run 00` while a run plays and `07 cleaned plate` on the plate, with the pass number taken from the `v.NNN` folder. Only when nothing at all is left is the slot the dark gray **REJECTED** clip.
-
-**Un-retire walks back up, like a playhead.** Think of a shot's versions as a tape, ordered by rung, then by pass (the `v.NNN` folder, the number on the label), then by file date for takes that share a pass: `A_` plates at the start, the newest file in the highest rung at the end. What the slot shows is the playhead. Reject rewinds it. Un-retire (the rotate-ccw button or `u`) moves it forward: it takes the retired version of that shot just *above* what's showing, from any rung's `retired/` folder, moves it back to its old folder (recreated if needed), and plays it.
-
-So you can reject your way down to see every version of a shot, every run and every plate, then press un-retire on repeat. It brings them back earliest first and ends on the latest. Nothing is logged; the folders are the tape:
-- **Any retired file counts,** whether mpv retired it, another tool did, or you moved it by hand.
-- **A retired file below the playhead waits.** It comes back in order once you've rewound past it.
-- **A file whose old place is taken is skipped.**
-- **Undo everything** and the folders, the XML and its `.bak` are exactly as they started.
-
-**A shot's history: `UP` / `DOWN`.** `LEFT` / `RIGHT` move between shots; `UP` / `DOWN` move through every version of the shot you're on. `DOWN` all the way is the final, `UP` all the way is the cleaned plate, and the ends stop. In between, newest to oldest: candidates, driver candidates, run candidates, runs. Within a rung the order is the pass number (`v.002` is newer than `v.001`), the same tape reject and un-retire use. Retired takes are in the history too, where they would sit if they were live, with `retired` on the label; `u` on one brings that take back. The cropped plate under the cleaned one is left out unless it is all the shot has.
-
-Each press swaps that version into the slot for real: the XML's clip points at the file and its label updates, so it plays in the cut, on the same frame, paused or playing. A note shows where you are (`07 run 00 · 4 / 9`). No file moves. It counts as a change like a reject: quit and **Save changes?** Yes keeps it and renders the video, No puts the XML back. Step back to the version you started on and there is nothing to save, so quitting doesn't ask.
-
-**Approve** copies the file on screen, from whatever rung it's in, to the finals rung as `K_final/NN.<ext>` (named after the shot number). It refuses if that shot already has a final. Rejecting a final moves it to `K_final/retired/` and the slot drops to the rung below.
-
-**Every copy of the edit agrees.** The folders decide what plays, not the XML that happens to be open. Another copy of the same edit, or an older one, plays the same fallback the moment it's opened. A copy whose file still names a rejected clip walks down from that clip's rung.
-
-**Other XMLs.** Clips that aren't in a rung layout have no Approve and no walk. Reject moves the clip to `retired/<its path relative to the XML>` beside the XML (or `retired/<file name>` from outside its folder), and the slot plays as REJECTED until you un-retire it.
-
-### Quitting: Save changes? Yes / No / Cancel
-
-Every approve, reject and un-retire happens on disk right away, so you see the result as you go. The file moves, the approved copy, and the XML pointing its clipitem's `pathurl` and label (`<mastercomment1>`) at the file now playing. When mpv first opens an XML it remembers how the XML read and logs every move and copy it makes after that.
-
-Quit (`Esc`, `q`, window close, Cmd+Q) after changing anything and a full-frame prompt asks **Save changes?**
+Rejects and restores happen on disk right away, so you see the result as you go. Quit (`Esc`, `q`, window close, Cmd+Q) after changing anything and a full-frame prompt asks **Save changes?**
 
 | Choice | Key | What happens |
 |--------|-----|--------------|
 | **Yes** | `Y` | Keep everything. If the edit changed, render a fresh video of it (below), then quit. |
-| **No** (default) | `N` or `Enter` | Put everything back as it was when the XML was opened: every moved file returns, approved copies are deleted, the XML is restored exactly (and a `.bak` made this session is removed). The video is left alone. Quit. |
+| **No** (default) | `N` or `Enter` | Put everything back as it was when the XML was opened: every moved file returns and the XML is restored exactly (a `.bak` made this session is removed). |
 | **Cancel** | `C` or `Esc` | Close the prompt and carry on, right where you were. |
 
-The arrow keys and `Tab` move the highlight, and `Enter` takes it. You can also click a button. A quit that never shows the prompt (a crash aside) counts as **No**, so nothing is overwritten by accident. Quitting without having changed anything just quits.
+The arrow keys and `Tab` move the highlight, and `Enter` takes it. You can also click a button. A quit that never shows the prompt (a crash aside) counts as **No**, so nothing is overwritten by accident.
 
-**The video (Yes only).** mpv renders the whole edit beside the XML with the XML's name (`daily.xml` → `daily.mp4`), replacing the old one, and quits once that's done. A full-frame **SAVING…** card covers the picture meanwhile, with the file name and a seconds counter.
+**The video (Yes only).** mpv renders the whole edit beside the XML with the XML's name (`cut.xml` → `cut.mp4`), replacing the old one, and quits once that's done. A full-frame **SAVING…** card covers the picture meanwhile, with the file name and a seconds counter.
 - **Encode:** H.264 High at CRF 18 with bt709 colour tags, every clip converted to the edit's size and 8-bit 4:2:0 (so a 10-bit take in the cut doesn't stop the render), at the edit's frame rate with every frame present (a short source holds its last frame), plus AAC at 48 kHz with the soundtrack's channels.
 - **Burned in:** the shot labels and any REJECTED / MISSING cards, positioned as on screen.
 - **Writing:** the render goes to a hidden temp file and is renamed over the old video only when it's complete. If it fails, the old video stays and the message says why.
 - **Skipping:** quit again while it renders to skip the video and leave the old one untouched.
+
+A review never renders a video; the project's own tools make its dailies.
 
 ## Scripts
 
@@ -279,7 +245,7 @@ The arrow keys and `Tab` move the highlight, and `Enter` takes it. You can also 
 | `copy_remove_attempt_suffix.lua` | Active | Core workflow: filtering, variant mode, navigation, rename, shift, snapshot, trash |
 | `browse_to_next_folder.lua` | Active | Jump to next sibling folder |
 | `send_to_selects.lua` | Active | Copy file to `../selects/` |
-| `shot_jump.lua` | Active | Shot review: shot jumps on `LEFT`/`RIGHT`, cut scan, FCP7 XML assemblies with shot labels, approve / reject / un-retire buttons |
+| `shot_jump.lua` | Active | Shot review: shot jumps on `LEFT`/`RIGHT`, cut scan, FCP7 XML assemblies with shot labels, a shot's history on `UP`/`DOWN`, group review (marks saved to one choices file), start / end frames |
 | `autoload.lua` | Disabled | Upstream autoload (replaced by `autoload-files` in `mpv.conf`) |
 | `filename_display_navigation.lua` | Disabled | Superseded by `copy_remove_attempt_suffix.lua` |
 

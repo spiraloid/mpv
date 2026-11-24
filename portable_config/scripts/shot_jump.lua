@@ -2,8 +2,11 @@
 -- LEFT / RIGHT jump to the first frame of the previous / next shot.
 --
 -- Where the shots come from:
---   seq.xml (FCP7 xmeml)        -> played as an assembly of its source clips;
---                                  r retires the clip on screen
+--   seq.xml (FCP7 xmeml)        -> played as an assembly of its source clips.
+--                                  In a folder of lettered rung folders: Up /
+--                                  Down step through a shot's versions, and
+--                                  the review XML takes marks and Save.
+--                                  Elsewhere: r retires the clip on screen
 --   clip.mp4 + clip.xml beside  -> the sidecar's clipitem starts
 --   clip.mp4 alone              -> background scene-cut scan (a headless mpv
 --                                  running scdet), then clip.xml is written
@@ -23,6 +26,14 @@ local o = {
     threshold = 10,       -- scdet threshold, 0-100; lower finds more cuts
     write_xml = true,     -- write clip.xml beside a scanned video
     retired_dir = "retired",
+    -- Group review. review_xml: the XML a review opens. The two commands are the
+    -- project's own scripts ("path/under/the/xml/folder.py args"), run with
+    -- review_runner: one rebuilds the XML before it loads, the others (separated
+    -- by ;) apply a saved review to the folders and rebuild it.
+    review_xml = "review.xml",
+    review_runner = "uv",
+    review_open_cmd = "",
+    review_save_cmds = "",
 }
 options.read_options(o, "shot_jump")
 
@@ -308,6 +319,8 @@ local state = {}            -- per loaded file: path, shots, fps, assembly
 local pending_assembly      -- built in on_load, claimed on file-loaded
 local pending_action        -- reject / restore, carried out in on_load
 local browse                -- last Up / Down swap {idx, path}, until it has loaded
+local picks = {}            -- xml -> {shot number -> file}: Up / Down choices, held in memory
+local reviews = {}          -- xml -> a review session: marks and what to save (see "review")
 local export = {dirty = false}  -- assembly changed this session: render it on exit
 -- Everything this mpv session did on disk, so "No" on exit can put it back:
 -- snap[xml] = the XML's text (and whether a .bak existed) when first opened;
@@ -315,7 +328,8 @@ local export = {dirty = false}  -- assembly changed this session: render it on e
 local session = {snap = {}, journal = {}}
 local function journal_move(from, to) session.journal[#session.journal + 1] = {from = from, to = to} end
 local encoding = (mp.get_property("o") or "") ~= ""   -- running as the exporter itself
-local add_burn_in, bind_quit_keys, show_validation, modal_hover   -- defined further down
+local add_burn_in, bind_quit_keys, modal_hover                    -- defined further down
+local review_open, review_loaded, review_buttons, review_click, review_detail, current_review
 local scan                  -- running scan: path, token, log, offset, buf, cuts
 local scanned = {}          -- path -> finished cut list for this session
 local scan_timer
@@ -329,12 +343,12 @@ local function num(x) return string.format("%.6f", x) end
 
 -- ── rung layout ──────────────────────────────────────────────────────────────
 -- A shots folder whose subfolders are lettered rungs: A_cropped_plates,
--- B_cleaned_plates, ... I_candidates, ... K_final. A shot's file is NN.<video
--- ext> or NN_v#.<ext> anywhere inside a rung (drivers, comp layers, frames,
--- prompts, audio and uncompressed/ masters don't count). Rejecting moves the file
--- to <rung>/retired/<same path>; the slot then plays the newest live file for that
--- shot in the same rung, else the next rung down, down to A. Un-retire walks back
--- up through the retired/ folders, earliest first (see "the playhead").
+-- B_cleaned_plates, ... F_runs, ... I_candidates, ... K_final, with passes in
+-- v.NNN folders. A shot's file is NN.<video ext> or NN_v#.<ext> anywhere inside a
+-- rung (comp layers, frames, prompts, audio and uncompressed/ masters don't
+-- count). Nothing in a rung is moved, copied or renamed by this script: a slot
+-- plays the file its XML names (the next one down if that file is gone), Up /
+-- Down step through the shot's other versions, and a review saves the choice.
 
 local SKIP_DIRS = {retired = true, uncompressed = true}
 
@@ -390,14 +404,6 @@ local function retired_path(ri)
     return native_seps(ri.shots .. "/" .. ri.rung .. "/" .. sub)
 end
 
-local function final_path(ri)
-    local k = "K_final"
-    for _, d in ipairs(utils.readdir(native_seps(ri.shots), "dirs") or {}) do
-        if d:match("^K_") then k = d; break end
-    end
-    return native_seps(ri.shots .. "/" .. k .. "/" .. ri.num .. "." .. ri.ext)
-end
-
 -- What a rung file shows, the way the burn-in labels read: "07 run 00"
 local function rung_label(ri, num_text)
     local stage = ri.rung:gsub("^%u_", ""):gsub("_", " ")
@@ -442,7 +448,10 @@ local function rung_files(dir, cache, all)
                 local info = utils.file_info(p)
                 if info and info.is_file and (info.size or 1) > 0 then   -- empty stubs don't count
                     local vk = version_key(p, info.mtime)
-                    if vk then out[#out + 1] = {path = p, nn = tonumber(num), mtime = info.mtime or 0, vk = vk} end
+                    if vk then
+                        out[#out + 1] = {path = p, nn = tonumber(num), mtime = info.mtime or 0, vk = vk,
+                                         size = info.size or 0}
+                    end
                 end
             end
         end
@@ -458,7 +467,7 @@ end
 
 -- Which version of the shot this is within its rung, for the small line over the
 -- label: "11-21 18:50 · 2 of 3" (file date, place oldest first). Counts live and retired versions together, oldest
--- first, so the numbers hold still while reject / un-retire move files around.
+-- first.
 -- nil when the rung has only one version of the shot.
 local function version_detail(ri, play_path, cache)
     local rung_dir = native_seps(ri.shots .. "/" .. ri.rung)
@@ -517,54 +526,6 @@ local function resolve_source(path, enabled, cache)
     return nil, "missing"
 end
 
--- ── the playhead: reject rewinds, un-retire goes forward ─────────────────────
--- A shot's versions sit on a tape ordered by version_key: higher rung is later, then higher pass,
--- then newer file. Reject retires what's showing and
--- the slot drops to the next live file down (walk_down). Un-retire brings back
--- the retired file closest *above* what's showing, so pressing it on repeat
--- climbs back to the latest. No log: whatever sits in a <rung>/retired/ folder
--- counts, whoever moved it there. Moves keep modified times, so the order holds.
-
--- The retired version of shot nn just above play_path (nil play_path: below
--- everything, as on a REJECTED slot) whose old place is free.
--- Returns {ret_path, orig_path} or nil.
-local function next_up(shots, nn, play_path, cache)
-    local here
-    if play_path then
-        local info = utils.file_info(play_path)
-        here = info and version_key(play_path, info.mtime)
-    end
-    local best, best_key
-    local sdir = native_seps(shots)
-    for _, d in ipairs(utils.readdir(sdir, "dirs") or {}) do
-        if d:match("^%u_") then
-            for _, f in ipairs(rung_files(utils.join_path(utils.join_path(sdir, d), "retired"), cache)) do
-                if f.nn == nn then
-                    local fri = rung_info(f.path)
-                    local orig = fri and live_path(fri)
-                    if orig and not exists(orig) then
-                        local k = f.vk
-                        if (not here or key_above(k, here)) and (not best_key or key_above(best_key, k)) then
-                            best, best_key = {ret_path = f.path, orig_path = orig}, k
-                        end
-                    end
-                end
-            end
-        end
-    end
-    return best
-end
-
--- What un-retire brings back: the take on screen when it is itself retired (picked
--- with Up / Down), else the retired one just above it
-local function undo_for(ri, play, cache)
-    if play and ri.retired then
-        local orig = live_path(ri)
-        return not exists(orig) and {ret_path = play, orig_path = orig} or nil
-    end
-    return next_up(ri.shots, ri.nn, play, cache)
-end
-
 -- The latest state of shot nn: the newest live file in the highest rung that has one
 local function top_version(shots, nn, cache)
     local best
@@ -590,8 +551,16 @@ local function build_assembly(xml_path, seq)
     -- any clip that exists (the whole frame is painted over, the sound is muted
     -- or replaced by the soundtrack), so nothing after it shifts.
     local filler
+    local mine = picks[xml_path] or {}
     for _, c in ipairs(seq.video) do
         c.xml_path = c.path
+        -- an Up / Down choice plays in place of the file the XML names
+        local pri = c.path and rung_info(c.path)
+        local pick = pri and mine[pri.num]
+        if pick and exists(pick) then
+            c.chosen = slash(pick) ~= slash(c.path)
+            c.path, c.enabled = pick, true
+        end
         c.resolved, c.how = resolve_source(c.path, c.enabled, cache)
         filler = filler or c.resolved
     end
@@ -617,7 +586,7 @@ local function build_assembly(xml_path, seq)
             local num_text = label and label:match("^(%d%S*)")
             local ri = rung_info(c.resolved or c.xml_path)
             local label_color = c.label_color
-            if c.how == "walked" and ri then
+            if (c.how == "walked" or c.chosen) and ri then
                 label, label_color = rung_label(ri, num_text), nil   -- say what is really playing
             end
             shots[#shots + 1] = {t = t, len = len, idx = i, name = c.name, retired = rejected,
@@ -625,10 +594,7 @@ local function build_assembly(xml_path, seq)
                                  label = label, label_color = label_color, num_text = num_text,
                                  detail = ri and not rejected and not is_missing and not ri.retired
                                           and version_detail(ri, c.resolved, cache) or nil,
-                                 refs = refs, rung = ri,
-                                 undo = ri and undo_for(ri, (not rejected and not is_missing) and c.resolved or nil,
-                                                        cache) or nil,
-                                 approved = ri and not ri.retired and exists(final_path(ri)) or false}
+                                 refs = refs, rung = ri, num = ri and ri.num or nil, xml_file = c.xml_path}
             if ri then review_layout = true end
             if rejected then retired = retired + 1 end
             if is_missing then
@@ -790,35 +756,6 @@ end
 -- source is no longer held open (Windows refuses to move an open file).
 local function do_retire(p)
     local xml_dir = dir_of(p.xml)
-    if p.review then
-        -- rung layout: <rung>/retired/<same path>, then the slot walks down
-        local ri = rung_info(p.path)
-        local dest = ri and retired_path(ri)
-        if not dest or exists(dest) then osd("reject failed: already in retired/", 3); return end
-        if not mkdir_p(dir_of(dest)) or not move_file(p.path, dest) then
-            osd("reject failed: could not move " .. name_of(p.path), 3); return
-        end
-        journal_move(p.path, dest)
-        local old_dir = dir_of(p.path)
-        if slash(old_dir) ~= ri.shots .. "/" .. ri.rung then remove_empty_dir(old_dir) end
-        local next_src = walk_down(ri, {})
-        local text = read_file(p.xml)
-        if not text then osd("moved, but could not read the XML", 3); return end
-        local bak = p.xml .. ".bak"
-        if not exists(bak) then write_file(bak, text) end
-        local was_url = (p.pathurl or ""):lower():match("^file:") ~= nil
-        local new_text, next_label
-        if next_src then
-            next_label = rung_label(rung_info(next_src), p.num_text)
-            new_text = rewrite_xml(text, p.file_key, path_to_pathurl(next_src, xml_dir, was_url), true, next_label)
-        else
-            new_text = rewrite_xml(text, p.file_key, path_to_pathurl(dest, xml_dir, was_url), false)
-        end
-        if not write_file(p.xml, new_text) then osd("moved, but could not update the XML", 3); return end
-        msg.info("retired " .. p.path .. " -> " .. dest .. (next_src and (", now " .. next_src) or ""))
-        p.notice = "rejected: " .. p.name .. (next_label and ("  →  " .. next_label) or "  (nothing left)")
-        return
-    end
     local dest = retired_dest(xml_dir, p.path)
     if not dest or not mkdir_p(dir_of(dest)) then
         osd("reject failed: could not create the retired folder", 3); return
@@ -845,36 +782,6 @@ end
 -- its pathurl back, and the .bak goes if the XML now matches it again.
 local function do_restore(p)
     local xml_dir = dir_of(p.xml)
-    if p.review then
-        local e = p.entry
-        if exists(e.orig_path) or not exists(e.ret_path) then
-            osd("un-retire failed: " .. name_of(e.orig_path) .. " is already back or gone", 3); return
-        end
-        if not mkdir_p(dir_of(e.orig_path)) or not move_file(e.ret_path, e.orig_path) then
-            osd("un-retire failed: could not move " .. name_of(e.ret_path) .. " back", 3); return
-        end
-        journal_move(e.ret_path, e.orig_path)
-        -- take out the folders under <rung>/retired (and retired/ itself) left empty
-        local ri = rung_info(e.ret_path)
-        local top = ri and (ri.shots .. "/" .. ri.rung .. "/retired")
-        local dir = dir_of(e.ret_path)
-        while top and slash(dir):sub(1, #top) == top do
-            remove_empty_dir(dir)
-            if exists(dir) then break end
-            dir = dir_of(dir)
-        end
-        local text = read_file(p.xml)
-        if not text then osd("moved back, but could not read the XML", 3); return end
-        local was_url = (p.pathurl or ""):lower():match("^file:") ~= nil
-        local label = rung_label(rung_info(e.orig_path), p.num_text)
-        local new_text = rewrite_xml(text, p.file_key, path_to_pathurl(e.orig_path, xml_dir, was_url), true, label)
-        if not write_file(p.xml, new_text) then osd("moved back, but could not update the XML", 3); return end
-        local bak = p.xml .. ".bak"
-        if read_file(bak) == new_text then os.remove(bak) end
-        msg.info("restored " .. e.ret_path .. " -> " .. e.orig_path)
-        p.notice = "restored: " .. label
-        return
-    end
     if p.orig ~= p.path then
         if exists(p.orig) or not mkdir_p(dir_of(p.orig)) or not move_file(p.path, p.orig) then
             osd("restore failed: could not move " .. name_of(p.path) .. " back", 3); return
@@ -900,24 +807,6 @@ local function do_restore(p)
     if read_file(bak) == new_text then os.remove(bak) end
     msg.info("restored " .. p.path .. " -> " .. p.orig)
     p.notice = "restored: " .. p.name
-end
-
--- Up / Down: the clip's slot now plays that version. Only the XML changes
--- (pathurl + label); nothing moves on disk.
-local function do_pick(p)
-    local text = read_file(p.xml)
-    if not text then osd("couldn't read the XML", 3); return end
-    local was_url = (p.pathurl or ""):lower():match("^file:") ~= nil
-    local label = rung_label(rung_info(p.path), p.num_text)
-    local new_text = rewrite_xml(text, p.file_key, path_to_pathurl(p.path, dir_of(p.xml), was_url), true, label)
-    if new_text == text then return end
-    local bak = p.xml .. ".bak"
-    if not exists(bak) then write_file(bak, text) end
-    if not write_file(p.xml, new_text) then osd("couldn't update the XML", 3); return end
-    if read_file(bak) == new_text then os.remove(bak) end
-    session.journal[#session.journal + 1] = {xml_edit = p.xml}
-    msg.info("picked " .. p.path)
-    p.notice = label .. (p.k and string.format("  ·  %d / %d", p.k, p.n) or "")
 end
 
 -- ── validation: does the XML match the folders? ───────────────────────────────
@@ -1033,64 +922,32 @@ local function validate(asm, seq, xml_path)
     return {fixable = fix, notes = notes, targets = targets}
 end
 
--- Re-point the slots the check flagged (p.targets: file_key -> file), or with no
--- targets every rung slot at its shot's latest state. Runs in on_load like the
--- other actions; timing, soundtrack, non-rung slots and kept picks are left alone.
-local function do_regen(p)
-    local text = read_file(p.xml)
-    if not text then osd("regenerate failed: could not read the XML", 3); return end
-    local xml_dir = dir_of(p.xml)
-    local seq = parse_xmeml(text, xml_dir)
-    if not seq then osd("regenerate failed: could not parse the XML", 3); return end
-    local cache, changed, new_text = {}, 0, text
-    for _, c in ipairs(seq.video) do
-        local ri = c.path and rung_info(c.path)
-        if ri and (not p.targets or p.targets[c.file_key]) then
-            local top = p.targets and p.targets[c.file_key] or top_version(ri.shots, ri.nn, cache)
-            if top and not exists(top) then top = nil end
-            local live = exists(live_path(ri)) and live_path(ri)
-            if top and (not live or slash(top) ~= slash(live) or not c.enabled) then
-                local label = c.label and xml_unescape(c.label)
-                local num_text = label and label:match("^(%d%S*)")
-                local was_url = (c.pathurl or ""):lower():match("^file:") ~= nil
-                new_text = rewrite_xml(new_text, c.file_key, path_to_pathurl(top, xml_dir, was_url), true,
-                                       rung_label(rung_info(top), num_text))
-                changed = changed + 1
-            end
-        end
-    end
-    if changed == 0 then p.notice = "XML already matches the folders"; return end
-    local bak = p.xml .. ".bak"
-    if not exists(bak) then write_file(bak, text) end
-    if not write_file(p.xml, new_text) then osd("regenerate failed: could not write the XML", 3); return end
-    session.journal[#session.journal + 1] = {xml_edit = p.xml}
-    msg.info(string.format("regenerated %s: %d slot(s) re-pointed", p.xml, changed))
-    p.notice = string.format("XML regenerated: %d slot%s re-pointed", changed, changed == 1 and "" or "s")
-end
-
 local function run_action(action)
     if action.kind == "reject" then do_retire(action)
-    elseif action.kind == "regen" then do_regen(action)
-    elseif action.kind == "pick" then do_pick(action)
-    else do_restore(action) end
+    elseif action.kind == "restore" then do_restore(action) end
+    -- "choose" (Up / Down, a review reload): nothing happens on disk
 end
 
 mp.add_hook("on_load", 50, function()
     local url = mp.get_property("stream-open-filename", "")
     if not is_xml(url) or url:find("://", 1, true) then return end
     local xml_path = absolute(url)
+    if review_open and not encoding then review_open(xml_path) end   -- a review rebuilds its XML first
     local text = read_file(xml_path)
     if not text or not text:find("<xmeml", 1, true) then return end
 
     local first_load = not session.snap[xml_path]
     if first_load then
-        session.snap[xml_path] = {text = text, bak = exists(xml_path .. ".bak")}
+        -- a review's XML is rebuilt by the project's scripts, never by this one:
+        -- nothing to put back
+        session.snap[xml_path] = reviews[xml_path] and {review = true}
+                                 or {text = text, bak = exists(xml_path .. ".bak")}
     end
     local action = pending_action
     pending_action = nil
     if action and action.xml == xml_path then
         run_action(action)
-        if action.notice then export.dirty, export.xml = true, xml_path end
+        if action.notice and action.kind ~= "choose" then export.dirty, export.xml = true, xml_path end
         text = read_file(xml_path) or text
         mp.set_property("file-local-options/start", tostring(action.pos))
     end
@@ -1105,7 +962,7 @@ mp.add_hook("on_load", 50, function()
     asm.url = url
     asm.generated = text:find(GENERATED_MARK, 1, true) ~= nil
     asm.notice = action and action.notice
-    if first_load and not encoding and not asm.generated then asm.issues = validate(asm, seq, xml_path) end
+    if first_load and not encoding and not asm.generated then validate(asm, seq, xml_path) end   -- to the log
     mp.set_property("stream-open-filename", asm.edl)
     local chain = {}
     if #asm.blank > 0 then
@@ -1365,9 +1222,7 @@ mp.register_event("file-loaded", function()
         if asm.soundtrack then select_soundtrack() end
         if encoding then add_burn_in(); return end
         bind_quit_keys(true)
-        if asm.issues and #asm.issues.fixable > 0 then
-            mp.add_timeout(0.3, function() if state.assembly == asm then show_validation(asm) end end)
-        end
+        if review_loaded then review_loaded(asm) end
         local notes = {}
         if asm.retired > 0 then notes[#notes + 1] = asm.retired .. " rejected" end
         if asm.missing > 0 then notes[#notes + 1] = asm.missing .. " missing" end
@@ -1377,6 +1232,7 @@ mp.register_event("file-loaded", function()
     end
 
     bind_quit_keys(false)
+    if review_loaded then review_loaded(nil) end
     if not path or path:find("://", 1, true) or is_xml(path) or not is_real_video() then return end
     if load_sidecar(path) then return end
     if scanned[path] then set_shots_from_cuts(scanned[path]); return end
@@ -1434,7 +1290,7 @@ local function shot_prev()
     for i = #shots, 1, -1 do if usable(i) then jump_to(i); return end end
 end
 
--- ── on-screen overlay (assembly only): shot label + Approve / Reject ──────────
+-- ── on-screen overlay (assembly only): shot label + buttons ──────────────────
 -- The label is <comments><mastercomment1> of each V1 clip, bottom-right of the
 -- video frame, shot number full size and the rest half size on one baseline,
 -- matching a burned-in label. Numbers are for a 1080-high frame and scale with it.
@@ -1454,14 +1310,13 @@ local L = {
 local B = {right = 51, top = 44, size = 64, icon = 32, gap = 16,   -- round icon buttons
            rejected_fs = 220}                                      -- REJECTED card text
 local COLORS = {white = "FFFFFF", gray = "808080", orange = "00A5FF"}  -- ASS is BGR
-local BUTTON_COLORS = {approve = "4F9E2E", reject = "1E1ED0", restore = "7A7A7A", off = "6E6E6E"}
+local BUTTON_COLORS = {reject = "1E1ED0", restore = "7A7A7A", off = "6E6E6E"}
 
 local overlay = mp.create_osd_overlay("ass-events")
 local overlay_key
 local overlay_on = true
 local buttons = {}          -- drawn buttons: name, x0, y0, x1, y1, enabled
 local hovered               -- name of the enabled button under the mouse
-local approving = false
 local update_hover          -- defined with the mouse handling below
 
 local function ass_text(s) return (s:gsub("\\", "\\\\"):gsub("{", "\\{"):gsub("}", "\\}")) end
@@ -1475,28 +1330,15 @@ local function current_shot_index()
     return cur
 end
 
--- What Approve / Reject can do for this shot. In the review layout only
--- candidates (shots/I_candidates) qualify; elsewhere any clip used once can be
--- rejected and nothing can be approved.
+-- The buttons for this shot. In a rung layout: the review's four marks (none
+-- outside a review). Elsewhere any clip used once can be rejected and restored.
 local function shot_buttons(shot)
     local asm = state.assembly
     if not shot or not asm or asm.generated then return nil end
     local undo_btn = {name = "restore", icon = "rotate-ccw", color = BUTTON_COLORS.restore, enabled = true}
     local reject_off = {name = "reject", icon = "thumbs-down", color = BUTTON_COLORS.off, enabled = false, dim = true}
-    if asm.review_layout then
-        local ri = shot.rung
-        if not ri then return nil end
-        if shot.retired or shot.missing or ri.retired then
-            -- nothing left below, or a retired take: undo (if there is one) and a grayed-out reject
-            return shot.undo and {undo_btn, reject_off} or nil
-        end
-        local list = {}
-        if shot.undo then list[#list + 1] = undo_btn end
-        list[#list + 1] = {name = "approve", icon = "thumbs-up", filled = shot.approved,
-                           color = BUTTON_COLORS.approve,
-                           enabled = not shot.approved and not approving and ri.letter ~= "K"}
-        list[#list + 1] = {name = "reject", icon = "thumbs-down", color = BUTTON_COLORS.reject, enabled = true}
-        return list
+    if asm.review_layout then   -- rung layout: the four marks, in a review
+        return review_buttons and review_buttons(shot) or nil
     end
     if shot.missing or shot.refs ~= 1 then return nil end
     if shot.retired then return {undo_btn, reject_off} end
@@ -1540,10 +1382,11 @@ local function label_events(events, shot, vx0, vy0, vw, vh, k)
     events[#events + 1] = line
     -- which version this is, small, over the label (the label itself keeps the
     -- burn-in format "NN stage PP" that reviewers and OCR read)
-    if shot.detail and not missing then
+    local detail = review_detail and review_detail(shot) or shot.detail
+    if detail and not missing then
         local yd = vy0 + vh - (L.baseline + L.detail_gap - L.descent * L.fs_small) * k
         events[#events + 1] = string.format("{\\an3\\pos(%.1f,%.1f)%s\\1c&H%s&\\fs%.1f\\fscx%d}%s",
-            x, yd, style, COLORS.white, L.fs_small * k, L.sx_small, ass_text(shot.detail))
+            x, yd, style, COLORS.white, L.fs_small * k, L.sx_small, ass_text(detail))
     end
 end
 
@@ -1587,6 +1430,11 @@ do  -- thumbs-down is thumbs-up turned 180 degrees on the 24x24 grid
     end
     ICONS["thumbs-down"] = down
 end
+-- check: M20 6 9 17l-5-5 · check-check: M18 6 7 17l-5-5, m22 10-7.5 7.5L13 16
+-- layers: three stacked sheets, after lucide's
+ICONS["check"] = {{20, 6, 9, 17, 4, 12}}
+ICONS["check-check"] = {{18, 6, 7, 17, 2, 12}, {22, 10, 14.5, 17.5, 13, 16}}
+ICONS["layers"] = {{12, 2, 2, 7, 12, 12, 22, 7, 12, 2}, {2, 12, 12, 17, 22, 12}, {2, 17, 12, 22, 22, 17}}
 
 local function scaled(pts, x0, y0, s)
     local seq = {}
@@ -1637,16 +1485,20 @@ local function button_events(events, shot, vx0, vy0, vw, k)
     local y = vy0 + B.top * k
     local s = B.icon * k / 24                        -- icon scale: 24-unit grid -> pixels
     local inset = (d - B.icon * k) / 2
+    local x_first, tip = x, nil
     for _, b in ipairs(list) do
         local hot = b.enabled and hovered == b.name
-        -- approved (disabled) reads as done: solid fill; grayed out (dim) reads as off
-        local fill_a = b.dim and "60" or ((hot or not b.enabled) and "00" or "40")
+        if b.text and (hot or (b.lit and not tip)) then tip = b.text end
+        -- lit (a mark that is set) or disabled-and-done reads solid; quiet (a mark
+        -- that isn't set) reads faint; grayed out (dim) reads as off
+        local fill_a = b.dim and "60" or ((hot or b.lit or (not b.enabled and not b.quiet)) and "00" or (b.quiet and "A0" or "40"))
         local icon_a = b.dim and "90" or "00"
         -- every drawing is in absolute OSD pixels, anchored at \pos(0,0)
         events[#events + 1] = string.format(
             "{\\an7\\pos(0,0)\\p1\\bord%.2f\\shad0\\1c&H%s&\\1a&H%s&\\3c&HFFFFFF&\\3a&H%s&}%s{\\p0}",
-            hot and 2.5 * k or 0, b.color, fill_a, hot and "00" or "FF", circle_path(x + d / 2, y + d / 2, d / 2))
-        if b.filled then  -- approved: the thumb is filled in
+            (hot or b.lit) and 2.5 * k or 0, b.color, fill_a, (hot or b.lit) and "00" or "FF",
+            circle_path(x + d / 2, y + d / 2, d / 2))
+        if b.filled then  -- a closed icon drawn solid
             events[#events + 1] = string.format(
                 "{\\an7\\pos(0,0)\\p1\\bord0\\shad0\\1c&HFFFFFF&\\1a&H00&}%s{\\p0}",
                 icon_fill_path(b.icon, x + inset, y + inset, s))
@@ -1656,6 +1508,11 @@ local function button_events(events, shot, vx0, vy0, vw, k)
             s, icon_a, icon_path(b.icon, x + inset, y + inset, s))
         buttons[#buttons + 1] = {name = b.name, x0 = x, y0 = y, x1 = x + d, y1 = y + d, enabled = b.enabled}
         x = x + d + gap
+    end
+    if tip then   -- what the hovered (else the lit) button means, beside the row
+        events[#events + 1] = string.format(
+            "{\\an6\\pos(%.1f,%.1f)\\bord%.2f\\shad0\\b1\\q2\\3c&H000000&\\3a&H37&\\1c&HFFFFFF&\\1a&H00&\\fs%.1f}%s",
+            x_first - gap, y + d / 2, 2 * k, 24 * k, ass_text(tip))
     end
 end
 
@@ -1672,7 +1529,7 @@ local function render(force)
     local d = mp.get_property_native("osd-dimensions")
     if not shot or not d or not d.w or d.w <= 0 then clear_overlay(); return end
     local key = table.concat({i, d.w, d.h, d.ml, d.mt, d.mr, d.mb, tostring(hovered),
-                              tostring(shot.approved), tostring(approving), tostring(overlay_on),
+                              tostring(overlay_on),
                               tostring(mp.get_property_bool("pause"))}, ":")
     if key == overlay_key and not force then return end
 
@@ -1719,19 +1576,7 @@ local function retire()
     if shot.retired then osd("already rejected: " .. (shot.label or shot.name), 1.5); return end
     local clip = asm.seq.video[shot.idx]
     if asm.review_layout then
-        local ri = shot.rung
-        if ri and ri.retired then osd("this take is already retired", 1.5); return end
-        if not ri then osd("only clips in a lettered rung folder can be rejected", 2); return end
-        if exists(retired_path(ri)) then
-            osd(ri.rung .. "/retired/" .. ri.sub .. " already exists; not rejected", 3); return
-        end
-        if not exists(shot.play) then osd("source missing: " .. tostring(shot.play), 2.5); return end
-        pending_action = {
-            kind = "reject", review = true, xml = asm.xml, path = shot.play, file_key = clip.file_key,
-            pathurl = clip.pathurl, name = shot.label or clip.name, num_text = shot.num_text, pos = pos,
-        }
-        osd("rejecting " .. (shot.label or clip.name) .. "…", 1)
-        mp.commandv("loadfile", state.path, "replace")  -- let go of the file before moving it
+        osd("nothing is rejected in a rung layout: step to the version you want and mark it", 3)
         return
     elseif shot.refs > 1 then
         osd(string.format("%s is used %d times in this edit; not rejected", name_of(clip.path), shot.refs), 2.5)
@@ -1765,19 +1610,7 @@ local function restore()
     local shot = current_shot()
     if not shot then return end
     local clip = asm.seq.video[shot.idx]
-    if asm.review_layout then
-        local ri = shot.rung
-        local live = not shot.retired and not shot.missing and shot.play or nil
-        local e = ri and undo_for(ri, live, {})
-        if not e then osd("nothing newer to bring back", 1.5); return end
-        pending_action = {
-            kind = "restore", review = true, xml = asm.xml, entry = e, shots = ri.shots,
-            file_key = clip.file_key, pathurl = clip.pathurl, num_text = shot.num_text, pos = pos,
-        }
-        osd("bringing back " .. name_of(e.orig_path) .. "…", 1)
-        mp.commandv("loadfile", state.path, "replace")  -- let go of files before moving them
-        return
-    end
+    if asm.review_layout then return end
     if not shot.retired then osd("not rejected: " .. (shot.label or shot.name), 1.5); return end
     local orig = original_path(asm, clip.path)
     if orig ~= clip.path and exists(orig) then
@@ -1792,70 +1625,6 @@ local function restore()
     mp.commandv("loadfile", state.path, "replace")  -- let go of the file first, as for reject
 end
 
--- ── approve (a): copy the candidate to shots/K_final/NN.<ext> ────────────────
-
--- Copies to a hidden .NN.<ext>.part beside the final and renames when done, so
--- an interrupted copy never sits in K_final looking like a final.
-local approve_job   -- {src, part, final} while a copy runs
-
-local function finish_approve_copy(job)
-    if exists(job.part) and not exists(job.final) and os.rename(job.part, job.final) then
-        session.journal[#session.journal + 1] = {create = job.final}
-        return true
-    end
-    os.remove(job.part)
-    return false
-end
-
-local function approve()
-    local asm = state.assembly
-    if not asm then osd("a approves a candidate while playing an XML assembly", 2); return end
-    local shot = current_shot()
-    if not shot or approving then return end
-    if shot.retired then restore(); return end  -- on a rejected slot, a is the undo button
-    local ri = shot.rung
-    if ri and ri.retired and not shot.missing then osd("this take is retired; un-retire it first", 2); return end
-    if not ri or ri.retired or shot.missing then
-        osd("only clips in a lettered rung folder can be approved", 2); return
-    end
-    if ri.letter == "K" then osd("this is already a final", 1.5); return end
-    local final = final_path(ri)
-    if exists(final) then
-        shot.approved = true
-        render(true)
-        osd("shot " .. ri.num .. " already has a final: " .. name_of(final), 2.5)
-        return
-    end
-    local src = shot.play
-    if not exists(src) then osd("source missing: " .. tostring(src), 2.5); return end
-    if not mkdir_p(dir_of(final)) then osd("approve failed: could not create the finals folder", 3); return end
-    local job = {src = src, final = final,
-                 part = utils.join_path(dir_of(final), "." .. name_of(final) .. ".part")}
-    os.remove(job.part)
-    job.args = is_windows
-        and {"powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command",
-             "Copy-Item -LiteralPath " .. ps_quote(src) .. " -Destination " .. ps_quote(job.part) .. " -ErrorAction Stop"}
-        or {"cp", src, job.part}
-    approving, approve_job = true, job
-    render(true)
-    job.token = mp.command_native_async({name = "subprocess", args = job.args, playback_only = false,
-                                         capture_stdout = true, capture_stderr = true},
-        function(ok, res)
-            if job.finished then return end   -- finished at shutdown instead
-            job.finished = true
-            approving, approve_job = false, nil
-            if ok and res and res.status == 0 and finish_approve_copy(job) then
-                shot.approved = true
-                msg.info("approved " .. src .. " -> " .. final)
-                osd("approved: " .. (shot.label or shot.name) .. "  →  final " .. name_of(final), 2.5)
-            else
-                msg.error("approve copy failed: " .. tostring(res and res.stderr))
-                osd("approve failed: could not copy to K_final", 3)
-            end
-            render(true)
-        end)
-end
-
 -- ── mouse: click the buttons ──────────────────────────────────────────────────
 
 local click_bound = false
@@ -1865,9 +1634,9 @@ local function set_click_binding(on)
     if on then
         mp.add_forced_key_binding("MBTN_LEFT", "shot_button_click", function()
             update_hover(mp.get_property_native("mouse-pos"))   -- where the pointer is now
-            if hovered == "approve" then approve()
-            elseif hovered == "restore" then restore()
-            elseif hovered == "reject" then retire() end
+            if hovered == "restore" then restore()
+            elseif hovered == "reject" then retire()
+            elseif hovered and review_click then review_click(hovered) end
         end)
         -- keep a quick second click from toggling fullscreen
         mp.add_forced_key_binding("MBTN_LEFT_DBL", "shot_button_dbl", function() end)
@@ -1945,54 +1714,127 @@ local function ass_header(w, h)
 end
 
 -- ── Up / Down: a shot's history ───────────────────────────────────────────────
--- Every version of the shot on screen, in tape order (rung, then pass, as
--- reject and un-retire use): the final at the bottom, then candidates, drivers,
--- runs, and the cleaned plate at the top. Retired takes sit where they would if
--- they were live. Up swaps the next older one into the slot, Down the next
--- newer; the ends stop. The swap is real: the XML's clip points at that file, so
--- it plays in the cut. No file moves. Like any change, Save changes? No puts the
--- XML back.
+-- Every version of the shot on screen: the final at the bottom, then each rung
+-- from the top down (candidates, drivers, run candidates, runs), newest pass
+-- first with that rung's retired takes under its live ones, and the cleaned
+-- plate at the top. Up swaps the next older one into the slot, Down the next
+-- newer; the ends stop. The swap is held in memory (picks): nothing is written,
+-- the XML included. A review saves the choice (see "review").
 
--- Shot nn's history, oldest first. The cropped plate under the cleaned one is
--- left out, unless it is all the shot has or it is what the slot shows (keep).
-local function shot_history(shots, nn, keep)
-    local all, cache, sdir = {}, {}, native_seps(shots)
-    local cleaned = false
+-- Every file of shot nn in the rungs: {path, letter, pass, retired, mtime, size}
+local function shot_versions(shots, nn, cache)
+    local rows, sdir = {}, native_seps(shots)
+    cache = cache or {}
     for _, d in ipairs(utils.readdir(sdir, "dirs") or {}) do
         if d:match("^%u_") then
             for _, f in ipairs(rung_files(utils.join_path(sdir, d), cache, true)) do
                 if f.nn == nn then
-                    all[#all + 1] = f
-                    if f.vk[1] == "B" then cleaned = true end
+                    local ri = rung_info(f.path)
+                    rows[#rows + 1] = {path = f.path, letter = f.vk[1], pass = f.vk[2], mtime = f.mtime,
+                                       size = f.size, retired = ri and ri.retired or false, rung = ri and ri.rung}
                 end
             end
         end
     end
-    local list, here = {}, keep and slash(keep)
-    for _, f in ipairs(all) do
-        if not (cleaned and f.vk[1] == "A" and slash(f.path) ~= here) then list[#list + 1] = f end
+    return rows
+end
+
+-- Are two files the same picture? Same size, and the same bytes at five places
+-- (read only when the sizes match, which is rare unless one is a copy).
+local sample_memo = {}
+local function file_sample(row)
+    local key = row.path .. "|" .. row.size .. "|" .. row.mtime
+    if sample_memo[key] == nil then
+        local out, f = {}, io.open(row.path, "rb")
+        if f then
+            for _, frac in ipairs({0, 0.25, 0.5, 0.75}) do
+                f:seek("set", math.floor(row.size * frac))
+                out[#out + 1] = f:read(4096) or ""
+            end
+            f:seek("set", math.max(0, row.size - 4096))
+            out[#out + 1] = f:read(4096) or ""
+            f:close()
+        end
+        sample_memo[key] = f and table.concat(out) or false
+    end
+    return sample_memo[key]
+end
+
+local function same_file(a, b)
+    if a.size ~= b.size or a.size == 0 then return false end
+    local sa, sb = file_sample(a), file_sample(b)
+    return sa and sb and sa == sb or false
+end
+
+-- The file a copy was made from: the same shot's identical file in the lowest
+-- rung under it (a final copied from a candidate copied from a run: the run).
+-- nil when path is an original itself.
+local function original_of(path, rows)
+    local me, here = nil, slash(path or "")
+    for _, r in ipairs(rows) do if slash(r.path) == here then me = r end end
+    if not me then return nil end
+    local best
+    for _, r in ipairs(rows) do
+        if r.letter < me.letter and (not best or r.letter < best.letter) and same_file(r, me) then best = r end
+    end
+    return best and best.path or nil
+end
+
+-- The history, oldest first: originals only (a copy shows as its original). The
+-- cropped plate under the cleaned one is left out, unless it is all the shot
+-- has or it is what the slot shows (keep).
+local function shot_history(rows, keep)
+    local cleaned, here = false, keep and slash(keep)
+    for _, r in ipairs(rows) do if r.letter == "B" then cleaned = true end end
+    local list = {}
+    for _, r in ipairs(rows) do
+        local shown = slash(r.path) == here
+        if not (cleaned and r.letter == "A" and not shown) and not original_of(r.path, rows) then
+            list[#list + 1] = r
+        end
     end
     table.sort(list, function(a, b)
-        if key_above(b.vk, a.vk) then return true end
-        if key_above(a.vk, b.vk) then return false end
-        return a.path < b.path   -- a retired take beside a live one at the same place
+        if a.letter ~= b.letter then return a.letter < b.letter end
+        if a.retired ~= b.retired then return a.retired end        -- retired sits under the live ones
+        if a.pass ~= b.pass then return a.pass < b.pass end
+        if a.mtime ~= b.mtime then return a.mtime < b.mtime end
+        return a.path < b.path
     end)
     return list
+end
+
+-- Put a version in the shot's slot: remembered in picks and applied when the
+-- assembly is rebuilt on the reload. Nothing is written.
+local function choose_version(asm, shot, path, note)
+    picks[asm.xml] = picks[asm.xml] or {}
+    picks[asm.xml][shot.num] = path
+    local r = reviews[asm.xml]
+    if r then
+        r.touched[shot.num], r.cleared[shot.num] = true, nil
+    elseif o.review_xml ~= "" then
+        note = note .. "   (not saved: open " .. o.review_xml .. " to choose)"
+    end
+    pending_action = {kind = "choose", xml = asm.xml, notice = note,
+                      pos = mp.get_property_number("time-pos") or shot.t}
+    osd(note, 1.5)
+    mp.commandv("loadfile", state.path, "replace")
 end
 
 local function version_step(dir)
     local asm = state.assembly
     if not asm or asm.generated then return end
     local shot = current_shot()
-    if not shot or not shot.rung then osd("no versions to show here", 1); return end
+    if not shot or not shot.rung or not shot.num then osd("no versions to show here", 1); return end
+    local rows = shot_versions(shot.rung.shots, shot.rung.nn)
     -- a press can land before the last swap has loaded: step on from that one
     local from = (browse and browse.idx == shot.idx) and browse.path or shot.play
-    local list = shot_history(shot.rung.shots, shot.rung.nn, from)
+    from = from and (original_of(from, rows) or from)
+    local list = shot_history(rows, from)
     local function find(path)
         if not path then return nil end
         for j, f in ipairs(list) do if slash(f.path) == slash(path) then return j end end
     end
-    local home = find(from) or find(shot.play)
+    local home = find(from) or find(shot.play and (original_of(shot.play, rows) or shot.play))
     if #list == 0 or (home and #list < 2) then osd("no other versions of this shot", 1); return end
     local k = home and (home + dir) or #list   -- nothing on screen: the newest there is
     if k < 1 or k > #list then
@@ -2001,13 +1843,49 @@ local function version_step(dir)
         return
     end
     local f = list[k]
-    local clip = asm.seq.video[shot.idx]
     browse = {idx = shot.idx, path = f.path}
-    pending_action = {kind = "pick", xml = asm.xml, path = f.path, file_key = clip.file_key,
-                      pathurl = clip.pathurl, num_text = shot.num_text, k = k, n = #list,
-                      pos = mp.get_property_number("time-pos") or shot.t}
-    osd(string.format("%s  ·  %d / %d", rung_label(rung_info(f.path), shot.num_text), k, #list), 1.5)
-    mp.commandv("loadfile", state.path, "replace")
+    choose_version(asm, shot, f.path,
+                   string.format("%s  ·  %d / %d", rung_label(rung_info(f.path), shot.num_text), k, #list))
+end
+
+-- ── Ctrl+S on a shot's first or last frame: NN_start.png / NN_end.png ─────────
+-- The clean video frame of the version showing, into the frames rung (the C_
+-- folder): one new pass per mpv session, opened on the first save, and never
+-- over a file that is already there. Any other frame is the usual snapshot.
+local frame_pass = {}   -- frames rung -> this session's pass folder
+
+local function save_frame()
+    local function plain() mp.commandv("script-binding", "copy_remove_attempt_suffix/save_custom_snapshot_plain") end
+    local asm, shot = state.assembly, current_shot()
+    local ri = shot and shot.rung
+    if not asm or not ri or shot.missing or shot.retired then return plain() end
+    local pos = mp.get_property_number("time-pos") or 0
+    local f = math.floor((pos - shot.t) * asm.fps + 0.5)
+    local n = math.floor(shot.len * asm.fps + 0.5)
+    local which = f <= 0 and "start" or (f >= n - 1 and "end" or nil)
+    if not which then return plain() end
+    local sdir, cdir = native_seps(ri.shots), nil
+    for _, d in ipairs(utils.readdir(sdir, "dirs") or {}) do
+        if d:match("^C_") then cdir = utils.join_path(sdir, d) end
+    end
+    if not cdir then return plain() end
+    local pass = frame_pass[cdir]
+    if not pass then
+        local top = -1
+        for _, d in ipairs(utils.readdir(cdir, "dirs") or {}) do
+            local v = d:match("^v%.(%d+)$")
+            if v then top = math.max(top, tonumber(v)) end
+        end
+        pass = utils.join_path(cdir, string.format("v.%03d", top + 1))
+        if not mkdir_p(pass) then osd("could not create " .. name_of(pass), 3); return end
+        frame_pass[cdir] = pass
+    end
+    local name = ri.num .. "_" .. which .. ".png"
+    local out = utils.join_path(pass, name)
+    if exists(out) then osd(name .. " is already in " .. name_of(pass) .. "; not replaced", 3); return end
+    mp.commandv("screenshot-to-file", out, "video")
+    if exists(out) then osd("saved " .. name_of(cdir) .. "/" .. name_of(pass) .. "/" .. name, 2.5)
+    else osd("could not save " .. name, 3) end
 end
 
 mp.add_key_binding(nil, "shot_next", shot_next, {repeatable = true})
@@ -2015,9 +1893,9 @@ mp.add_key_binding(nil, "shot_prev", shot_prev, {repeatable = true})
 mp.add_key_binding(nil, "version_up", function() version_step(-1) end, {repeatable = true})    -- older
 mp.add_key_binding(nil, "version_down", function() version_step(1) end, {repeatable = true})   -- newer
 mp.add_key_binding(nil, "retire", retire)
-mp.add_key_binding(nil, "approve", approve)
 mp.add_key_binding(nil, "undo", restore)
 mp.add_key_binding(nil, "toggle_overlay", toggle_overlay)
+mp.add_key_binding(nil, "save_frame", save_frame)
 
 -- ── export: render the assembly to <xml name>.mp4 ────────────────────────────
 -- Matches the burned-in dailies: H.264 High, CRF 18 (medium), the edit's frame
@@ -2121,7 +1999,7 @@ end
 local saving_overlay = mp.create_osd_overlay("ass-events")
 saving_overlay.z = 1000
 
-local function draw_saving(name, secs)
+local function draw_saving(name, secs, hint)
     local d = mp.get_property_native("osd-dimensions") or {w = 1920, h = 1080}
     local w, h = d.w or 1920, d.h or 1080
     local k = h / 1080
@@ -2130,8 +2008,9 @@ local function draw_saving(name, secs)
         string.format("{\\an7\\pos(0,0)\\p1\\bord0\\shad0\\1c&H000000&\\1a&H30&}m 0 0 l %d 0 %d %d 0 %d{\\p0}", w, w, h, h),
         string.format("{\\an5\\pos(%.1f,%.1f)\\bord0\\shad0\\b1\\q2\\1c&HFFFFFF&\\1a&H00&\\fs%.1f\\fsp%.1f}SAVING…",
             w / 2, h / 2 - 20 * k, 150 * k, 6 * k),
-        string.format("{\\an5\\pos(%.1f,%.1f)\\bord0\\shad0\\q2\\1c&HC0C0C0&\\1a&H00&\\fs%.1f}%s  ·  %ds  ·  press again to quit without the video",
-            w / 2, h / 2 + 90 * k, 30 * k, ass_text(name), secs),
+        string.format("{\\an5\\pos(%.1f,%.1f)\\bord0\\shad0\\q2\\1c&HC0C0C0&\\1a&H00&\\fs%.1f}%s  ·  %ds%s",
+            w / 2, h / 2 + 90 * k, 30 * k, ass_text(name), secs,
+            hint or "  ·  press again to quit without the video"),
     }, "\n")
     saving_overlay:update()
 end
@@ -2214,8 +2093,10 @@ local function revert_session()
         end
     end
     for xml, snap in pairs(session.snap) do
-        if read_file(xml) ~= snap.text then write_file(xml, snap.text) end
-        if not snap.bak then os.remove(xml .. ".bak") end
+        if not snap.review then
+            if read_file(xml) ~= snap.text then write_file(xml, snap.text) end
+            if not snap.bak then os.remove(xml .. ".bak") end
+        end
     end
     session.journal = {}
     msg.info(string.format("put back %d change(s)%s", undone, failed > 0 and (", " .. failed .. " failed") or ""))
@@ -2333,14 +2214,12 @@ end
 local choose   -- set below
 
 local function open_prompt()
-    local moved, made, edits = 0, 0, 0
+    local moved = 0
     for _, e in ipairs(session.journal) do
-        if e.create then made = made + 1 elseif e.xml_edit then edits = edits + 1 else moved = moved + 1 end
+        if e.from then moved = moved + 1 end
     end
     local what = {}
     if moved > 0 then what[#what + 1] = moved .. (moved == 1 and " file move" or " file moves") end
-    if made > 0 then what[#what + 1] = made .. (made == 1 and " approved copy" or " approved copies") end
-    if edits > 0 then what[#what + 1] = "XML changed" end
     open_modal({
         title = "Save changes?", title_fs = 96,
         lines = {table.concat(what, ", ") .. " this session.  Yes keeps the changes and renders the video.  " ..
@@ -2353,35 +2232,475 @@ local function open_prompt()
     })
 end
 
-show_validation = function(asm)
-    local iss = asm.issues
-    local lines = {}
-    for _, l in ipairs(iss.fixable) do lines[#lines + 1] = l end
-    for _, l in ipairs(iss.notes) do lines[#lines + 1] = "note: " .. l end
-    local more = #lines - 10
-    if more > 0 then
-        for i = #lines, 11, -1 do table.remove(lines, i) end
-        lines[#lines + 1] = string.format("… and %d more (see the mpv log)", more)
+-- ── review: choices and marks, saved to one file ──────────────────────────────
+-- A review is the XML named by review_xml, in a rung layout. Nothing here moves,
+-- copies or rewrites a shot file or the XML. Up / Down choose a version (in
+-- memory), a mark says what happens to it, and Save writes one file,
+-- <shots>/selects.json:
+--   {"saved": "...", "by": "...",
+--    "shots": {"21": {"file": "shots/F_runs/v.012/21.mp4", "mark": "candidate", "note": ""}}}
+-- file is relative to the XML's folder and is always an original, never a copy;
+-- mark is candidate / final / reroll / comp or null. Only shots with a choice
+-- are in it. The project's own scripts (review_save_cmds) then apply it to the
+-- folders and rebuild the XML; review_open_cmd rebuilds it before each open.
+
+local MARKS = {
+    {name = "candidate", icon = "check", color = "C08A2E", text = "Accept as candidate", key = "c"},
+    {name = "final", icon = "check-check", color = "4F9E2E", text = "Accept as final", key = "a"},
+    {name = "reroll", icon = "rotate-ccw", color = "1E8CE0", text = "Mark for re-roll", key = "r"},
+    {name = "comp", icon = "layers", color = "C85A8C", text = "Mark for comp", key = "m"},
+}
+local MARK_TEXT = {}
+for _, m in ipairs(MARKS) do MARK_TEXT[m.name] = m.text end
+local review_busy = false
+
+current_review = function()
+    local asm = state.assembly
+    return asm and reviews[asm.xml] or nil
+end
+
+-- running the project's scripts ------------------------------------------------
+
+local function find_runner()
+    local name = o.review_runner
+    if name:find("[/\\]") then return exists(name) and name or nil end
+    local exts = is_windows and {".exe", ".cmd", ".bat", ""} or {""}
+    local function try(dir)
+        for _, ext in ipairs(exts) do
+            local p = utils.join_path(dir, name .. ext)
+            local info = utils.file_info(p)
+            if info and info.is_file then return p end
+        end
     end
-    lines[#lines + 1] = ""
-    lines[#lines + 1] = "Regenerate re-points only the slots listed above.  Picks you kept, timing and soundtrack stay."
-    lines[#lines + 1] = "Answering No when you quit undoes it."
-    open_modal({
-        title = "This XML doesn't match the folders", title_fs = 64, button_w = 300,
-        lines = lines,
-        choices = {{label = "Regenerate XML", keys = {"r", "R", "g", "G"}}, {label = "Ignore", keys = {"i", "I"}}},
-        default = 2, cancel = 2,
-        hint = "R  regenerate   ·   I or Esc  ignore   ·   ← →  then Enter",
-        done = function(i)
-            if i == 1 then
-                pending_action = {kind = "regen", xml = asm.xml, targets = iss.targets,
-                                  pos = mp.get_property_number("time-pos") or 0}
-                mp.commandv("loadfile", state.path, "replace")
-            else
-                render(true)
+    for dir in (os.getenv("PATH") or ""):gmatch(is_windows and "[^;]+" or "[^:]+") do
+        local p = try(dir)
+        if p then return p end
+    end
+    -- an app started from the Finder or a shortcut has a short PATH
+    local home = os.getenv("HOME") or os.getenv("USERPROFILE") or ""
+    local dirs = is_windows and {home .. "\\.local\\bin", home .. "\\.cargo\\bin"}
+        or {home .. "/.local/bin", home .. "/.cargo/bin", "/opt/homebrew/bin", "/usr/local/bin"}
+    for _, dir in ipairs(dirs) do
+        local p = try(dir)
+        if p then return p end
+    end
+    return nil
+end
+
+-- "path/under/root.py arg arg" -> the argument list to run it, or nil and why not.
+-- mpv can't set a subprocess's working folder, so the runner is told the folder.
+local function tool_args(root, cmd)
+    local parts = {}
+    for w in cmd:gmatch("%S+") do parts[#parts + 1] = w end
+    if #parts == 0 then return nil, "no script configured" end
+    local script = utils.join_path(root, native_seps(parts[1]))
+    if not exists(script) then return nil, parts[1] .. " not found" end
+    local runner = find_runner()
+    if not runner then return nil, o.review_runner .. " not found" end
+    local args = {runner, "run", "--directory", root, "--script", script}
+    for i = 2, #parts do args[#args + 1] = parts[i] end
+    return args
+end
+
+-- The environment for a script: this one's, with the usual tool folders on PATH
+local function tool_env(runner)
+    local env = utils.get_env_list()
+    local sep = is_windows and ";" or ":"
+    local extra = {dir_of(runner)}
+    if not is_windows then extra[#extra + 1] = "/opt/homebrew/bin"; extra[#extra + 1] = "/usr/local/bin" end
+    local found = false
+    for i, kv in ipairs(env) do
+        local k, v = kv:match("^([^=]*)=(.*)$")
+        if k and k:upper() == "PATH" then
+            env[i] = k .. "=" .. v .. sep .. table.concat(extra, sep)
+            found = true
+        end
+    end
+    if not found then env[#env + 1] = "PATH=" .. table.concat(extra, sep) end
+    return env
+end
+
+local function tool_spec(args)
+    return {name = "subprocess", args = args, env = tool_env(args[1]), playback_only = false,
+            capture_stdout = true, capture_stderr = true}
+end
+
+-- ok, what the script printed (when it failed, its errors too)
+local function tool_result(res)
+    local ok = res and res.status == 0 and not res.killed_by_us
+    local text = (res and res.stdout or "") .. (ok and "" or ("\n" .. (res and res.stderr or "")))
+    local lines = {}
+    for line in text:gmatch("[^\r\n]+") do
+        if line:match("%S") then lines[#lines + 1] = (line:gsub("%s+$", "")) end
+    end
+    return ok, lines
+end
+
+-- the choices file -------------------------------------------------------------
+
+local function selects_path(r) return utils.join_path(native_seps(r.shots), "selects.json") end
+
+-- {shot number -> {file (as written), mark, note}} as on disk
+local function read_selects(r)
+    local text = r.shots and read_file(selects_path(r))
+    local t = text and utils.parse_json(text)
+    local out = {}
+    if type(t) == "table" and type(t.shots) == "table" then
+        for num, e in pairs(t.shots) do
+            if type(e) == "table" and type(e.file) == "string" then
+                out[tostring(num)] = {file = e.file, mark = type(e.mark) == "string" and e.mark or nil,
+                                      note = type(e.note) == "string" and e.note or ""}
             end
+        end
+    end
+    return out
+end
+
+local function abs_file(r, rel) return native_seps(slash(r.root) .. "/" .. rel) end
+
+local function rel_file(r, path)
+    local p, root = slash(path), slash(r.root) .. "/"
+    if p:sub(1, #root) == root then return p:sub(#root + 1) end
+    return nil
+end
+
+local function json_str(s)
+    return '"' .. s:gsub('[%c"\\]', function(c)
+        if c == '"' then return '\\"' elseif c == "\\" then return "\\\\"
+        elseif c == "\n" then return "\\n" elseif c == "\t" then return "\\t" end
+        return string.format("\\u%04x", c:byte())
+    end) .. '"'
+end
+
+local function selects_text(shots)
+    local nums = {}
+    for num in pairs(shots) do nums[#nums + 1] = num end
+    table.sort(nums)
+    local rows = {}
+    for _, num in ipairs(nums) do
+        local e = shots[num]
+        rows[#rows + 1] = string.format('  %s: {"file": %s, "mark": %s, "note": %s}', json_str(num),
+            json_str(e.file), e.mark and json_str(e.mark) or "null", json_str(e.note or ""))
+    end
+    return string.format('{\n "saved": %s,\n "by": %s,\n "shots": {\n%s\n }\n}\n',
+        json_str(os.date("!%Y-%m-%dT%H:%M:%SZ")),
+        json_str(os.getenv("USER") or os.getenv("USERNAME") or ""),
+        table.concat(rows, ",\n"))
+end
+
+-- marks ------------------------------------------------------------------------
+
+-- The mark on what the slot shows: this session's, else the saved one
+local function mark_of(r, shot)
+    if not shot.num then return nil end
+    local file = slash(shot.file or shot.play or "")
+    local mine = r.marks[shot.num]
+    if mine and mine[file] ~= nil then return mine[file] or nil end
+    if r.cleared[shot.num] then return nil end
+    local b = r.base[shot.num]
+    if b and slash(abs_file(r, b.file)) == file then return b.mark end
+    return nil
+end
+
+-- "Accept as candidate" only means something on a run or a candidate (F_, I_)
+local function mark_fits(name, shot)
+    if name ~= "candidate" then return true end
+    local ri = rung_info(shot.file or shot.play)
+    return ri ~= nil and (ri.letter == "F" or ri.letter == "I")
+end
+
+review_buttons = function(shot)
+    local r = current_review()
+    if not r or review_busy or not shot.rung or not shot.num or shot.missing or shot.retired then return nil end
+    local cur = mark_of(r, shot)
+    local list = {}
+    for _, m in ipairs(MARKS) do
+        local ok = mark_fits(m.name, shot)
+        list[#list + 1] = {name = m.name, icon = m.icon, color = ok and m.color or BUTTON_COLORS.off,
+                           enabled = ok, dim = not ok, lit = cur == m.name, quiet = cur ~= m.name,
+                           text = m.text .. "  (" .. m.key .. ")"}
+    end
+    return list
+end
+
+-- The small line over the label: the mark, which version, where copies of it sit
+review_detail = function(shot)
+    local r = current_review()
+    if not r then return shot.detail end
+    local parts = {}
+    local mark = mark_of(r, shot)
+    if mark then parts[#parts + 1] = MARK_TEXT[mark] or mark end
+    if shot.detail then parts[#parts + 1] = shot.detail end
+    if shot.copies and #shot.copies > 0 then parts[#parts + 1] = "in " .. table.concat(shot.copies, ", ") end
+    return #parts > 0 and table.concat(parts, "  ·  ") or nil
+end
+
+local function set_mark(name)
+    local r, shot = current_review(), current_shot()
+    if not r or review_busy or export.prompting then return end
+    if not shot or not shot.rung or not shot.num or shot.missing or shot.retired then
+        osd("nothing to mark here", 1.5); return
+    end
+    if not mark_fits(name, shot) then
+        osd(MARK_TEXT[name] .. " only fits a run or a candidate", 2); return
+    end
+    local file = slash(shot.file or shot.play)
+    local new = mark_of(r, shot) ~= name and name or false
+    r.marks[shot.num] = r.marks[shot.num] or {}
+    r.marks[shot.num][file] = new
+    r.touched[shot.num], r.cleared[shot.num] = true, nil
+    osd((shot.label or shot.name) .. "  ·  " .. (new and MARK_TEXT[new] or "mark cleared"), 2)
+    render(true)
+end
+review_click = set_mark
+
+-- x: forget the shot's choice. Its entry leaves the choices file on save and the
+-- project's own rule decides what plays; until then the newest version shows.
+local function clear_choice()
+    local r, shot, asm = current_review(), current_shot(), state.assembly
+    if not r or review_busy or export.prompting or not shot or not shot.rung or not shot.num then return end
+    r.marks[shot.num] = nil
+    local top = top_version(shot.rung.shots, shot.rung.nn, {})
+    if top and slash(top) ~= slash(shot.play or "") then
+        choose_version(asm, shot, top, "choice cleared: " .. rung_label(rung_info(top), shot.num_text))
+    else
+        if picks[asm.xml] then picks[asm.xml][shot.num] = nil end
+        osd("choice cleared", 1.5)
+    end
+    r.touched[shot.num], r.cleared[shot.num] = true, true
+    render(true)
+end
+
+-- saving -----------------------------------------------------------------------
+
+-- What Save would write for the shot: {file, mark, note}, or nil for no entry
+local function review_entry(r, shot)
+    if r.cleared[shot.num] then return nil end
+    local file = shot.file or shot.play
+    if not file then return nil end
+    local mark = mark_of(r, shot)
+    local b = r.base[shot.num]
+    -- never chosen and not marked: only a version other than the XML's own is a choice
+    if not b and not mark and slash(file) == slash(shot.xml_orig or "") then return nil end
+    return {file = file, mark = mark, note = b and b.note or ""}
+end
+
+-- This session's shots whose entry differs from the saved one: {num, entry}
+local function review_changes(r)
+    local out = {}
+    for num in pairs(r.touched) do
+        local shot
+        for _, s in ipairs(state.shots or {}) do if s.num == num then shot = s; break end end
+        if shot then
+            local e, b = review_entry(r, shot), r.base[num]
+            local same
+            if not e or not b then same = (e == nil and b == nil)
+            else same = slash(abs_file(r, b.file)) == slash(e.file) and b.mark == e.mark end
+            if not same then out[#out + 1] = {num = num, entry = e} end
+        end
+    end
+    table.sort(out, function(a, b) return a.num < b.num end)
+    return out
+end
+
+local function short_line(s) return #s > 118 and (s:sub(1, 115) .. "…") or s end
+
+local function show_result(r)
+    local res = r.result
+    r.result = nil
+    if not res then return end
+    -- room for 16 lines: warnings and failures first claim, then the newest of the rest
+    local keep, room = {}, 16
+    for i, line in ipairs(res.lines) do
+        if line:upper():find("WARNING", 1, true) or line:find("FAILED", 1, true) or line:find("not run:", 1, true) then
+            keep[i] = true; room = room - 1
+        end
+    end
+    for i = #res.lines, 1, -1 do
+        if room <= 0 then break end
+        if not keep[i] then keep[i] = true; room = room - 1 end
+    end
+    local lines = {}
+    for i, line in ipairs(res.lines) do
+        if keep[i] then lines[#lines + 1] = short_line(line) end
+    end
+    open_modal({
+        title = res.ok and "Review saved" or "Saved, with a problem", title_fs = 64,
+        lines = lines,
+        choices = {{label = "OK", keys = {"o", "O", "y", "Y", "SPACE"}}},
+        default = 1, cancel = 1,
+        done = function() if res.done then res.done() else render(true) end end,
+    })
+end
+
+-- Save: the choices file first, then the project's scripts, then reload the XML
+-- they rebuilt and show what they said. done() runs when the card is dismissed.
+local function save_review(done)
+    local r = current_review()
+    if not r or review_busy then return end
+    local changes = review_changes(r)
+    if #changes == 0 then
+        if done then done() else osd("nothing to save", 1.5) end
+        return
+    end
+    -- read it again and change only this session's shots; written in place
+    local shots = read_selects(r)
+    for _, c in ipairs(changes) do
+        local rel = c.entry and rel_file(r, c.entry.file)
+        if c.entry and not rel then
+            osd("not saved: " .. name_of(c.entry.file) .. " is outside " .. name_of(r.root), 4); return
+        end
+        shots[c.num] = c.entry and {file = rel, mark = c.entry.mark, note = c.entry.note} or nil
+    end
+    if not write_file(selects_path(r), selects_text(shots)) then
+        osd("could not write " .. name_of(selects_path(r)), 4); return
+    end
+    r.base, r.marks, r.touched, r.cleared = read_selects(r), {}, {}, {}
+    local report = {string.format("%s: %d shot%s changed", name_of(selects_path(r)), #changes, #changes == 1 and "" or "s")}
+    msg.info("review saved: " .. selects_path(r))
+
+    local cmds = {}
+    for cmd in o.review_save_cmds:gmatch("[^;]+") do
+        if cmd:match("%S") then cmds[#cmds + 1] = trim(cmd) end
+    end
+    local all_ok = true
+    review_busy = true
+    mp.set_property_bool("pause", true)
+    clear_overlay()
+    hide_osc(true)
+    local t0 = mp.get_time()
+    local tick = mp.add_periodic_timer(0.5, function()
+        draw_saving("updating the folders", math.floor(mp.get_time() - t0), "")
+    end)
+    draw_saving("updating the folders", 0, "")
+
+    local function finish()
+        tick:kill()
+        review_busy = false
+        saving_overlay:remove()
+        hide_osc(false)
+        r.result = {ok = all_ok, lines = report, done = done}
+        -- the XML was rebuilt from the saved choices: it carries them now
+        if all_ok and #cmds > 0 then picks[r.xml] = nil end
+        pending_action = {kind = "choose", xml = r.xml, notice = "review saved",
+                          pos = mp.get_property_number("time-pos") or 0}
+        mp.commandv("loadfile", state.path, "replace")
+    end
+    local function step(i)
+        local cmd = cmds[i]
+        if not cmd then return finish() end
+        local label = name_of((cmd:match("^%S+")))
+        local args, why = tool_args(r.root, cmd)
+        if not args then
+            all_ok = false
+            report[#report + 1] = label .. " not run: " .. why
+            return step(i + 1)
+        end
+        mp.command_native_async(tool_spec(args), function(success, res)
+            local ok, lines = tool_result(success and res or nil)
+            if not ok then
+                all_ok = false
+                report[#report + 1] = label .. " FAILED" .. (res and res.status and (" (exit " .. res.status .. ")") or "")
+            end
+            -- its last lines, and every warning wherever it was printed
+            for j, line in ipairs(lines) do
+                if j > #lines - 8 or line:upper():find("WARNING", 1, true) then report[#report + 1] = line end
+            end
+            step(i + 1)
+        end)
+    end
+    if #cmds == 0 then report[#report + 1] = "no scripts configured: the folders were not updated" end
+    step(1)
+end
+
+local function open_review_prompt(r)
+    local n = #review_changes(r)
+    open_modal({
+        title = "Save changes?", title_fs = 96,
+        lines = {string.format("%d shot%s chosen or marked this session.  Yes saves the choices and updates the folders.  " ..
+                               "No forgets them.", n, n == 1 and "" or "s")},
+        choices = {{label = "Yes", keys = {"y", "Y"}}, {label = "No", keys = {"n", "N"}},
+                   {label = "Cancel", keys = {"c", "C"}}},
+        default = 2, cancel = 3,
+        hint = "Y  yes   ·   N  no   ·   C or Esc  cancel   ·   ← →  then Enter",
+        done = function(i)
+            if i == 1 then save_review(function() mp.command("quit") end)
+            elseif i == 2 then mp.command("quit")
+            else render(true) end
         end,
     })
+end
+
+-- keys, only while a review is open --------------------------------------------
+
+local review_keys = false
+local function bind_review_keys(on)
+    if on == review_keys or encoding then return end
+    review_keys = on
+    local list = {{"x", "clear", clear_choice}}
+    for _, m in ipairs(MARKS) do
+        list[#list + 1] = {m.key, m.name, function() set_mark(m.name) end}
+    end
+    for _, key in ipairs({"Ctrl+S", "Ctrl+Shift+s", "Meta+s"}) do
+        list[#list + 1] = {key, "save_" .. key, function() save_review() end}
+    end
+    for _, b in ipairs(list) do
+        if on then mp.add_forced_key_binding(b[1], "shot_review_" .. b[2], b[3])
+        else mp.remove_key_binding("shot_review_" .. b[2]) end
+    end
+end
+
+-- open -------------------------------------------------------------------------
+
+-- Before the XML is read: a review rebuilds it from the folders and the saved
+-- choices, once per session (Save rebuilds it again itself).
+review_open = function(xml_path)
+    if o.review_xml == "" or name_of(xml_path):lower() ~= o.review_xml:lower() then return end
+    if reviews[xml_path] then return end
+    local r = {xml = xml_path, root = dir_of(xml_path), marks = {}, touched = {}, cleared = {}}
+    reviews[xml_path] = r
+    if o.review_open_cmd == "" then return end
+    local args, why = tool_args(r.root, o.review_open_cmd)
+    if not args then r.open_note = "review not rebuilt: " .. why; return end
+    osd("building the review…", 30)
+    local ok, lines = tool_result(mp.command_native(tool_spec(args)))
+    osd("", 0.1)
+    if ok then msg.info("review rebuilt: " .. (lines[#lines] or ""))
+    else r.open_note = "review not rebuilt: " .. (lines[#lines] or "the script failed") end
+end
+
+-- After the assembly has loaded: the saved choices, what each slot is really
+-- showing (a copy counts as its original), and the keys.
+review_loaded = function(asm)
+    local r = asm and reviews[asm.xml]
+    if r and not asm.review_layout then reviews[asm.xml] = nil; r = nil end
+    bind_review_keys(r ~= nil)
+    if not r then return end
+    if not r.shots then
+        for _, shot in ipairs(asm.shots) do
+            if shot.rung then r.shots = shot.rung.shots; break end
+        end
+    end
+    if not r.base then r.base = read_selects(r) end
+    local cache = {}
+    for _, shot in ipairs(asm.shots) do
+        if shot.rung and shot.play then
+            local rows = shot_versions(shot.rung.shots, shot.rung.nn, cache)
+            shot.file = original_of(shot.play, rows) or shot.play
+            shot.xml_orig = shot.xml_file and (original_of(shot.xml_file, rows) or shot.xml_file)
+            local me
+            for _, row in ipairs(rows) do if slash(row.path) == slash(shot.file) then me = row end end
+            shot.copies = {}
+            for _, row in ipairs(rows) do
+                if me and row.letter > me.letter and row.rung and same_file(row, me) then
+                    local stage = row.rung:gsub("^%u_", ""):gsub("_", " ")
+                    shot.copies[#shot.copies + 1] = stage
+                end
+            end
+        end
+    end
+    if r.open_note then osd(r.open_note, 6); r.open_note = nil end
+    if r.result then mp.add_timeout(0.2, function() if current_review() == r then show_result(r) end end) end
 end
 
 -- Is the disk any different from when the session started? Stepping Up / Down
@@ -2391,7 +2710,7 @@ local function session_changed()
         if not e.xml_edit then return true end
     end
     for xml, snap in pairs(session.snap) do
-        if read_file(xml) ~= snap.text then return true end
+        if not snap.review and read_file(xml) ~= snap.text then return true end
     end
     return false
 end
@@ -2405,6 +2724,12 @@ local function quit_request()
     end
     if export.prompting then return end
     if pending_action then mp.add_timeout(0.2, quit_request); return end  -- let it land first
+    local r = current_review()
+    if r and not encoding then            -- a review: only its unsaved choices matter
+        if review_busy then return end
+        if #review_changes(r) > 0 then open_review_prompt(r) else mp.command("quit") end
+        return
+    end
     if session_changed() and not encoding then open_prompt() else mp.command("quit") end
 end
 
@@ -2437,8 +2762,7 @@ end
 
 -- ── exit: nothing half done ───────────────────────────────────────────────────
 -- A reject / restore normally lands in on_load a moment after the key press;
--- quitting in between carries it out here (files are closed by now). An approve
--- copy still running is finished synchronously.
+-- quitting in between carries it out here (files are closed by now).
 
 mp.register_event("shutdown", function()
     stop_scan()
@@ -2451,19 +2775,5 @@ mp.register_event("shutdown", function()
     -- Anything but Yes puts the disk back: No, or a quit that never showed the
     -- prompt (the default is No, so nothing is overwritten by accident).
     local keep = export.choice == "yes" or encoding
-    local job = approve_job
-    if job and not job.finished then
-        job.finished = true
-        mp.abort_async_command(job.token)
-        os.remove(job.part)
-        if keep then
-            local r = utils.subprocess({args = job.args, cancellable = false, playback_only = false})
-            if r.status == 0 and finish_approve_copy(job) then
-                msg.info("approved " .. job.src .. " -> " .. job.final .. " (finished at exit)")
-            else
-                os.remove(job.part)
-            end
-        end
-    end
     if not keep and #session.journal > 0 then revert_session() end
 end)

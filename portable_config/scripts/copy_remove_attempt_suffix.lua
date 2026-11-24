@@ -586,7 +586,7 @@ function show_custom_help()
     mp.osd_message([[Custom Hotkeys:
 
 s              - Select: copy file without '_attempt_##' suffix
-ctrl+s         - Take numbered snapshot
+ctrl+s         - Take numbered snapshot  |  XML: a shot's first / last frame saves NN_start / NN_end.png
 ctrl+c         - Copy current frame to clipboard
 ctrl+r         - Manually rebuild playlist
 \              - Toggle variant mode
@@ -596,7 +596,9 @@ h              - Show/hide this help
 Middle click   - Fullscreen <-> quarter-screen window
 Space          - Images: next image  |  Video/Audio: pause/play
 Left/Right     - Prev/next shot (frame step when no cuts known)
-a / r / u      - Approve / reject (rewind down the rungs) / un-retire (forward)
+c / a / r / m  - Review: accept as candidate / accept as final / mark for re-roll / mark for comp
+x              - Review: clear the shot's choice    ctrl+shift+s - Review: save
+r / u          - Plain XML (no rung folders): reject / restore a clip
 o              - Show/hide shot label + buttons (XML assembly)
 Up/Down        - Navigate playlist  |  XML: the shot's history, Up older (to the plate), Down newer (to the final)
 Enter          - Toggle fullscreen
@@ -624,7 +626,13 @@ mp.add_key_binding("s",          "copy_remove_attempt_suffix", copy_remove_attem
 mp.add_key_binding("\\",         "toggle_variant_mode",        toggle_variant_mode)
 mp.add_key_binding("DEL",        "move_to_trash",              move_to_trash)
 mp.add_key_binding("F2",         "rename_file",                rename_current_file)
-mp.add_key_binding("ctrl+s",     "save_custom_snapshot",       save_custom_snapshot)
+-- XML assembly: on a shot's first / last frame, Ctrl+S saves its start / end
+-- frame (shot_jump.lua), which falls back to the plain snapshot on any other frame
+mp.add_key_binding("ctrl+s",     "save_custom_snapshot",       function()
+    if is_xml_assembly(mp.get_property("path")) then mp.commandv("script-binding", "shot_jump/save_frame"); return end
+    save_custom_snapshot()
+end)
+mp.add_key_binding(nil,          "save_custom_snapshot_plain", save_custom_snapshot)
 mp.add_key_binding("ctrl+c",     "copy_frame_clipboard",       function()
     if is_windows then
         mp.command("screenshot-to-clipboard")
