@@ -81,6 +81,8 @@ frame_002.png
 
 The playlist auto-filters to the same media type as the starting file (video / image / audio). **Variant mode** controls whether `_attempt_##` files are visible.
 
+**One mpv at a time.** Opening a file while mpv is already running (a double-click, a shortcut app, a terminal) hands the file to the mpv that's open, brings it to the front, and the new launch quits; the same file just comes forward, on the frame it was on. If a review open there has unsaved choices, it doesn't switch: it asks you to save or quit first. This keeps two players from holding two states of the same review. Renders and anything driven over `--input-ipc-server` are left alone; `--script-opts=single_instance-enabled=no` turns it off for one launch.
+
 ## Shortcuts
 
 Press `h` in mpv for the same list on screen.
@@ -219,6 +221,8 @@ If a script is missing or fails, the card says so, word for word, and the choice
 
 **Any other XML in the same folders** (a dated daily, say) is browse-only: `UP` / `DOWN` work, nothing is saved, and the note says to open the review XML to choose.
 
+**Someone else has it open: preview.** Opening the review writes `review.xml.lock` beside it (your name, your computer, a heartbeat every minute) and quitting removes it. Anyone who opens the review while that lock is fresh, on any computer that shares the folder, gets a **preview**: a yellow line where the state row would be says who has it open and since when, and they can look and step through versions, but can't set states, write notes or save, and the project's build script isn't run for them. When the editor quits, the preview says so; quit and open again to make changes. A lock whose heartbeat is ten minutes old (a crash, a laptop that went to sleep) is free again. If two people open it within the same minute, the next heartbeat leaves one of them as the editor and switches the other to preview; Save checks the lock again first, so a stale state is never written over the choices.
+
 **Quitting** with unsaved choices asks **Save changes?** Yes saves as above and then quits, No forgets the session's choices (nothing was written, so nothing needs undoing), Cancel carries on. Tick **Also save an .mp4 of the review** (click it or press `V`; off by default) and Yes also renders the rebuilt review XML to an `.mp4` beside it (`review.xml` → `review.mp4`) behind a **SAVING…** card, then quits; pressing quit again skips the video. It renders only when the save went through, so the video never shows an XML the scripts failed to rebuild.
 
 **Start and end frames: `Ctrl+S`.** On the first frame of a shot it saves `NN_start.png`, on the last frame `NN_end.png`: the clean video frame of the version showing, with no label or buttons. They go in the frames rung (the `C_` folder), in one new pass per mpv session, opened on the first save. A file that is already there is never replaced. On any other frame `Ctrl+S` takes the usual numbered snapshot.
@@ -263,6 +267,7 @@ A review never renders a video; the project's own tools make its dailies.
 | `copy_remove_attempt_suffix.lua` | Active | Core workflow: filtering, variant mode, navigation, rename, shift, snapshot, trash |
 | `browse_to_next_folder.lua` | Active | Jump to next sibling folder |
 | `send_to_selects.lua` | Active | Copy file to `../selects/` |
+| `single_instance.lua` | Active | One mpv at a time: a second launch hands its file to the running one, which comes to the front |
 | `shot_jump.lua` | Active | Shot review: shot jumps on `LEFT`/`RIGHT`, cut scan, FCP7 XML assemblies with shot labels, a shot's history on `UP`/`DOWN`, group review (shot states saved to one choices file), start / end frames |
 | `autoload.lua` | Disabled | Upstream autoload (replaced by `autoload-files` in `mpv.conf`) |
 | `filename_display_navigation.lua` | Disabled | Superseded by `copy_remove_attempt_suffix.lua` |

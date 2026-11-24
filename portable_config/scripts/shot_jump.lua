@@ -930,6 +930,8 @@ local function run_action(action)
 end
 
 mp.add_hook("on_load", 50, function()
+    -- a second mpv handing its file to the one already running (single_instance.lua)
+    if mp.get_property_native("user-data/single_instance/leaving") then return end
     local url = mp.get_property("stream-open-filename", "")
     if not is_xml(url) or url:find("://", 1, true) then return end
     local xml_path = absolute(url)
@@ -1497,6 +1499,12 @@ local button_events
 do
 local ROW = {slot = 250, fs = 30, bar = 4, star = 28}
 local function row_events(events, list, vx0, vy0, vw, k)
+    if list.preview then   -- someone else is editing this review: say so where the row would be
+        events[#events + 1] = string.format(
+            "{\\an8\\pos(%.1f,%.1f)\\bord%.2f\\shad0\\b1\\q2\\3c&H000000&\\3a&H40&\\1c&H40C0FF&\\1a&H00&\\fs%.1f}%s",
+            vx0 + vw / 2, vy0 + (B.top + 14) * k, 2 * k, 30 * k, ass_text(list.preview))
+        return
+    end
     local w, h = ROW.slot * k, B.size * k
     local x = vx0 + (vw - #list * w) / 2
     local y = vy0 + B.top * k
@@ -2586,6 +2594,133 @@ local function selects_text(shots)
         table.concat(rows, ",\n"))
 end
 
+-- the lock: one editor per review, across machines ----------------------------
+-- Opening the review writes <review>.lock beside it (who, which computer, a
+-- heartbeat every minute) and quitting removes it. Anyone who opens the review
+-- while someone else's lock is fresh gets a preview: they can look and step
+-- through versions, but can't mark, note or save, so a stale state can't land
+-- over the choices being made elsewhere. A lock whose heartbeat is ten minutes
+-- old (a crash, a computer that went to sleep) is free again.
+local lock = {}
+do
+    local STALE, BEAT = 10 * 60, 60
+    local session_id = string.format("%d-%d-%d", utils.getpid(), os.time(), math.random(1e6))
+    local me = os.getenv("USER") or os.getenv("USERNAME") or "someone"
+    local host_name
+    local function host()
+        if host_name then return host_name end
+        local h = is_windows and os.getenv("COMPUTERNAME") or nil
+        if not h then
+            for _, args in ipairs({{"scutil", "--get", "ComputerName"}, {"hostname"}}) do
+                local r = mp.command_native({name = "subprocess", args = args, playback_only = false,
+                                             capture_stdout = true, capture_stderr = true})
+                if r and r.status == 0 and trim(r.stdout or "") ~= "" then h = trim(r.stdout); break end
+            end
+        end
+        host_name = h or "another computer"
+        return host_name
+    end
+    local function pid_alive(pid)
+        if type(pid) ~= "number" then return false end
+        local args = is_windows and {"tasklist", "/FI", "PID eq " .. pid, "/NH", "/FO", "CSV"}
+                     or {"ps", "-p", tostring(pid), "-o", "comm="}
+        local r = mp.command_native({name = "subprocess", args = args, playback_only = false,
+                                     capture_stdout = true, capture_stderr = true})
+        return ((r and r.stdout) or ""):lower():find("mpv", 1, true) ~= nil
+    end
+    local function path_for(xml) return xml .. ".lock" end
+    local function read_lock(xml)
+        local t = read_file(path_for(xml))
+        local j = t and utils.parse_json(t)
+        return type(j) == "table" and j or nil
+    end
+    local function text(opened)
+        return string.format('{"user": %s, "host": %s, "pid": %d, "session": %s, "opened": %d, "beat": %d}\n',
+            json_str(me), json_str(host()), utils.getpid(), json_str(session_id), opened, os.time())
+    end
+
+    -- someone else's live lock on this review, or nil when it's free
+    function lock.other(xml)
+        local j = read_lock(xml)
+        if not j or j.session == session_id then return nil end
+        if type(j.beat) ~= "number" or os.time() - j.beat > STALE then return nil end
+        if j.host == host() and j.user == me and not pid_alive(j.pid) then return nil end   -- a crash here
+        return j
+    end
+
+    -- "Bay on Studio Mac has this review open (since 14:02)"
+    function lock.who(j)
+        return string.format("%s on %s has this review open%s", tostring(j.user or "someone"),
+            tostring(j.host or "another computer"),
+            type(j.opened) == "number" and (" (since " .. os.date("%H:%M", j.opened) .. ")") or "")
+    end
+
+    local held, timer
+    local function beat()
+        for xml, r in pairs(reviews) do   -- a preview: say so once the other editor has gone
+            if r.preview and not r.preview_freed and not lock.other(xml) then
+                r.preview_freed = true
+                osd(tostring(r.preview.user or "The other editor") .. " closed " .. name_of(xml) ..
+                    ".  Quit and open it again to make changes.", 8)
+            end
+        end
+        if not held then return end
+        local j = read_lock(held.xml)
+        if j and j.session ~= session_id and type(j.beat) == "number" and os.time() - j.beat <= STALE then
+            -- someone else holds it now (two opened at once): this one becomes the preview
+            local r = reviews[held.xml]
+            held = nil
+            if r then r.preview = j end
+            osd("This review was taken: " .. lock.who(j) .. ".\nYour choices can't be saved.", 10)
+            render(true)
+            return
+        end
+        write_file(path_for(held.xml), text(held.opened))
+    end
+
+    function lock.take(xml)
+        lock.release()
+        local opened = os.time()
+        if not write_file(path_for(xml), text(opened)) then
+            msg.warn("could not write " .. path_for(xml)); return false
+        end
+        held = {xml = xml, opened = opened}
+        if not timer then timer = mp.add_periodic_timer(BEAT, beat) end
+        return true
+    end
+
+    -- does this mpv still hold the review's lock (checked again before saving)?
+    function lock.mine(xml)
+        if not held or held.xml ~= xml then return false end
+        local j = read_lock(xml)
+        return not j or j.session == session_id
+    end
+
+    function lock.release()
+        if not held then return end
+        local j = read_lock(held.xml)
+        if not j or j.session == session_id then os.remove(path_for(held.xml)) end
+        held = nil
+    end
+
+    function lock.watch()   -- a preview checks now and then whether the review came free
+        if not timer then timer = mp.add_periodic_timer(BEAT, beat) end
+    end
+
+    mp.register_event("shutdown", function() lock.release() end)
+    mp.register_event("start-file", function()
+        local p = mp.get_property("path")
+        if held and p and absolute(p) ~= held.xml then lock.release() end   -- another file: let it go
+    end)
+end
+
+-- the preview's answer to every key that would change the choices file
+local function in_preview(r)
+    if not r or not r.preview then return false end
+    osd("Preview: " .. lock.who(r.preview) .. ".  Nothing can be saved here.", 4)
+    return true
+end
+
 -- marks ------------------------------------------------------------------------
 
 -- The shot's state, which belongs to one file: this session's (r.marks[num] =
@@ -2614,7 +2749,7 @@ end
 -- leaves the note as it was
 function notes.edit(shot)
     local r = current_review()
-    if not r or review_busy or export.prompting or not shot or not shot.num then return end
+    if not r or review_busy or export.prompting or not shot or not shot.num or in_preview(r) then return end
     local num = shot.num
     require("mp.input").get({
         prompt = "Notes for " .. num .. " (Enter to save, Esc to skip): ",
@@ -2634,6 +2769,7 @@ end
 review_buttons = function(shot)
     local r = current_review()
     if not r or review_busy or not shot.rung or not shot.num or shot.missing or shot.retired then return nil end
+    if r.preview then return {row = true, preview = "PREVIEW  ·  " .. lock.who(r.preview) .. "  ·  nothing can be saved"} end
     local cur = mark_of(r, shot)
     local list = {row = true, note = notes.of(r, shot.num)}
     for _, m in ipairs(MARKS) do
@@ -2659,7 +2795,7 @@ end
 
 local function set_mark(name)
     local r, shot = current_review(), current_shot()
-    if not r or review_busy or export.prompting then return end
+    if not r or review_busy or export.prompting or in_preview(r) then return end
     if not shot or not shot.rung or not shot.num or shot.missing or shot.retired then
         osd("nothing to mark here", 1.5); return
     end
@@ -2679,7 +2815,7 @@ review_click = set_mark
 -- project's own rule decides what plays; until then the newest version shows.
 local function clear_choice()
     local r, shot, asm = current_review(), current_shot(), state.assembly
-    if not r or review_busy or export.prompting or not shot or not shot.rung or not shot.num then return end
+    if not r or review_busy or export.prompting or not shot or not shot.rung or not shot.num or in_preview(r) then return end
     r.marks[shot.num], r.notes[shot.num] = nil, nil
     local top = top_version(shot.rung.shots, shot.rung.nn, {})
     if top and slash(top) ~= slash(shot.play or "") then
@@ -2767,7 +2903,17 @@ end
 -- they rebuilt and show what they said. done() runs when the card is dismissed.
 local function save_review(done)
     local r = current_review()
-    if not r or review_busy then return end
+    if not r or review_busy or in_preview(r) then return end
+    if not lock.mine(r.xml) then   -- the lock went to someone else since this opened
+        local other = lock.other(r.xml)
+        if other then
+            r.preview = other
+            osd("Not saved: " .. lock.who(other) .. ".", 8)
+            render(true)
+            return
+        end
+        lock.take(r.xml)
+    end
     local changes = review_changes(r)
     if #changes == 0 then
         if done then done(true) else osd("nothing to save", 1.5) end
@@ -2901,6 +3047,15 @@ review_open = function(xml_path)
     if reviews[xml_path] then return end
     local r = {xml = xml_path, root = dir_of(xml_path), marks = {}, touched = {}, cleared = {}, notes = {}}
     reviews[xml_path] = r
+    local other = lock.other(xml_path)
+    if other then
+        -- someone else is editing: look only, and leave their files alone (no rebuild)
+        r.preview = other
+        lock.watch()
+        osd("Preview: " .. lock.who(other) .. ".\nYou can look and step through versions; nothing can be saved.", 8)
+        return
+    end
+    lock.take(xml_path)
     if o.review_open_cmd == "" then return end
     local args, why = tools.args(r.root, o.review_open_cmd)
     if not args then r.open_note = "review not rebuilt: " .. why; return end
@@ -2959,6 +3114,13 @@ local function session_changed()
     return false
 end
 
+-- single_instance.lua asks before opening a handed-over file over this one
+mp.register_script_message("unsaved-query", function(from)
+    local r = current_review()
+    local unsaved = (r and not encoding and not r.preview and #review_changes(r) > 0) or (not r and session_changed())
+    mp.commandv("script-message-to", from, "unsaved-reply", unsaved and "yes" or "no")
+end)
+
 local function quit_request()
     if export.running then           -- second quit while saving: skip the video
         export.skip = true
@@ -2971,6 +3133,7 @@ local function quit_request()
     local r = current_review()
     if r and not encoding then            -- a review: only its unsaved choices matter
         if review_busy then return end
+        if r.preview then mp.command("quit"); return end   -- nothing could be saved anyway
         if #review_changes(r) > 0 then open_review_prompt(r) else mp.command("quit") end
         return
     end
