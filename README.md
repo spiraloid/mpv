@@ -98,7 +98,7 @@ The playlist auto-filters to the same media type as the starting file (video / i
 
 | Key | Action |
 |-----|--------|
-| `LEFT` / `RIGHT` | Previous / next shot, landing on its first frame. Frame step when the file has no known cuts |
+| `LEFT` / `RIGHT` | Previous / next shot, landing on its first frame (paused, in an XML assembly). Frame step when the file has no known cuts |
 | `WHEEL_UP` / `WHEEL_DOWN` | Previous / next shot, one per notch (XML assembly) |
 | `UP` / `DOWN` | Step through the history of the shot on screen: `UP` older (to the cleaned plate), `DOWN` newer (to the final) |
 | `c` / `a` / `r` / `m` | Review: accept as candidate / accept as final / mark for re-roll / mark for comp. Press the lit one again to clear it |
@@ -162,7 +162,7 @@ shots/
 
 A shot's file is one named for its shot number: `07.mp4` or `07_v4.mp4`, anywhere inside a rung, in any video format. Empty stub files are ignored.
 
-**A shot's history: `UP` / `DOWN`.** `LEFT` / `RIGHT` move between shots; `UP` / `DOWN` move through every version of the shot you're on. `DOWN` all the way is the final, `UP` all the way is the cleaned plate, and the ends stop. In between, from the bottom: candidates, driver candidates, run candidates, runs. Within a rung the newest pass comes first (`v.002` is newer than `v.001`), with that rung's `retired/` takes under its live ones. The cropped plate under the cleaned one is left out unless it is all the shot has. A file that is only a copy of a lower one (a final copied from a candidate, a pick copied from a run) isn't listed twice: the original is shown, and the small line over the label says where copies of it sit (`in final`).
+**A shot's history: `UP` / `DOWN`.** `LEFT` / `RIGHT` move between shots; `UP` / `DOWN` move through every version of the shot you're on. `DOWN` all the way is the final, `UP` all the way is the cleaned plate, and the ends stop. In an XML assembly `LEFT` / `RIGHT` pause on the shot's first frame, and `UP` / `DOWN` pressed during playback pause there too, so a swap always lands on the shot on screen. In between, from the bottom: candidates, driver candidates, run candidates, runs. Within a rung the newest pass comes first (`v.002` is newer than `v.001`), with that rung's `retired/` takes under its live ones. The cropped plate under the cleaned one is left out unless it is all the shot has. A file that is only a copy of a lower one (a final copied from a candidate, a pick copied from a run) isn't listed twice: the original is shown, and the small line over the label says where copies of it sit (`in final`).
 
 Each press swaps that version into the slot, on the same frame, paused or playing, and a note shows where you are (`07 run 12 · 4 / 9`). The swap is held in memory: nothing is written until you save.
 

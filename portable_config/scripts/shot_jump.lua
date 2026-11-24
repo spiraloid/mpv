@@ -1,5 +1,6 @@
 -- shot_jump.lua
--- LEFT / RIGHT jump to the first frame of the previous / next shot.
+-- LEFT / RIGHT jump to the first frame of the previous / next shot (and pause
+-- there in an XML assembly).
 --
 -- Where the shots come from:
 --   seq.xml (FCP7 xmeml)        -> played as an assembly of its source clips.
@@ -1257,6 +1258,9 @@ end
 local function jump_to(i)
     local s = state.shots[i]
     local h = frame_slack()
+    -- an assembly stops on the shot, so Up / Down and the marks act on the shot
+    -- on screen instead of wherever playback has rolled on to
+    if state.assembly then mp.set_property_bool("pause", true) end
     mp.commandv("seek", tostring(math.max(0, s.t - h)), "absolute+exact")
     if state.assembly then
         osd(string.format("%d/%d  %s", i, #state.shots, s.name or ""), 1)
@@ -1805,7 +1809,7 @@ end
 
 -- Put a version in the shot's slot: remembered in picks and applied when the
 -- assembly is rebuilt on the reload. Nothing is written.
-local function choose_version(asm, shot, path, note)
+local function choose_version(asm, shot, path, note, pos)
     picks[asm.xml] = picks[asm.xml] or {}
     picks[asm.xml][shot.num] = path
     local r = reviews[asm.xml]
@@ -1815,7 +1819,7 @@ local function choose_version(asm, shot, path, note)
         note = note .. "   (not saved: open " .. o.review_xml .. " to choose)"
     end
     pending_action = {kind = "choose", xml = asm.xml, notice = note,
-                      pos = mp.get_property_number("time-pos") or shot.t}
+                      pos = pos or mp.get_property_number("time-pos") or shot.t}
     osd(note, 1.5)
     mp.commandv("loadfile", state.path, "replace")
 end
@@ -1844,8 +1848,15 @@ local function version_step(dir)
     end
     local f = list[k]
     browse = {idx = shot.idx, path = f.path}
+    -- playing: stop on the swapped shot's first frame, so the swap is seen and the
+    -- next press lands on the same shot
+    local pos
+    if not mp.get_property_bool("pause") then
+        mp.set_property_bool("pause", true)
+        pos = math.max(0, shot.t - frame_slack())
+    end
     choose_version(asm, shot, f.path,
-                   string.format("%s  ·  %d / %d", rung_label(rung_info(f.path), shot.num_text), k, #list))
+                   string.format("%s  ·  %d / %d", rung_label(rung_info(f.path), shot.num_text), k, #list), pos)
 end
 
 -- ── Ctrl+S on a shot's first or last frame: NN_start.png / NN_end.png ─────────
