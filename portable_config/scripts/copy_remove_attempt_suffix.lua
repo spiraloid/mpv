@@ -596,7 +596,7 @@ h              - Show/hide this help
 Middle click   - Fullscreen <-> quarter-screen window
 Space          - Images: next image  |  Video/Audio: pause/play
 Left/Right     - Prev/next shot (frame step when no cuts known)
-c / a / r / m  - Review: accept as candidate / accept as final / mark for re-roll / mark for comp
+r / c / m / a  - Review: shot state re-roll / re-circulate / comp / final
 x              - Review: clear the shot's choice    ctrl+shift+s - Review: save
 r / u          - Plain XML (no rung folders): reject / restore a clip
 o              - Show/hide shot label + buttons (XML assembly)

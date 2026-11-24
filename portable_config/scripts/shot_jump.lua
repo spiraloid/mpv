@@ -1439,6 +1439,17 @@ end
 ICONS["check"] = {{20, 6, 9, 17, 4, 12}}
 ICONS["check-check"] = {{18, 6, 7, 17, 2, 12}, {22, 10, 14.5, 17.5, 13, 16}}
 ICONS["layers"] = {{12, 2, 2, 7, 12, 12, 22, 7, 12, 2}, {2, 12, 12, 17, 22, 12}, {2, 17, 12, 22, 22, 17}}
+do  -- star: five points, closed, centred on the 24x24 grid
+    local pts = {}
+    for i = 0, 10 do
+        local r = (i % 2 == 0) and 10.5 or 4.4
+        local a = math.rad(-90 + 36 * i)
+        pts[#pts + 1] = 12 + r * math.cos(a)
+        pts[#pts + 1] = 12.8 + r * math.sin(a)
+    end
+    ICONS["star"] = {pts}
+end
+local STAR = {on = "00C8FF", off = "A0A0A0"}   -- ASS is BGR: yellow #FFC800, gray
 
 local function scaled(pts, x0, y0, s)
     local seq = {}
@@ -1479,11 +1490,61 @@ local function circle_path(cx, cy, r)
         cx - r, cy - c, cx - c, cy - r, cx, cy - r, cx + c, cy - r, cx + r, cy - c, cx + r, cy)
 end
 
+-- A row of text buttons centred across the top of the picture, no backgrounds:
+-- gray when off, white under the mouse, the state's own colour with a bar under
+-- it when set. b.star draws the star before the text (filled when set).
+local button_events
+do
+local ROW = {slot = 250, fs = 30, bar = 4, star = 28}
+local function row_events(events, list, vx0, vy0, vw, k)
+    local w, h = ROW.slot * k, B.size * k
+    local x = vx0 + (vw - #list * w) / 2
+    local y = vy0 + B.top * k
+    for _, b in ipairs(list) do
+        local hot = hovered == b.name
+        local col = b.lit and b.color or (hot and "FFFFFF" or STAR.off)
+        local cx, cy = x + w / 2, y + h / 2
+        local fs = ROW.fs * k
+        local text_w = #b.text * fs * 0.37              -- near enough for centring
+        local tx = cx
+        if b.star then
+            local ss = ROW.star * k
+            local group = ss + 8 * k + text_w
+            local sx = cx - group / 2
+            local s = ss / 24
+            events[#events + 1] = string.format(
+                "{\\an7\\pos(0,0)\\p1\\bord%.2f\\shad0\\1c&H000000&\\1a&H%s&\\3c&H000000&\\3a&H60&}%s{\\p0}",
+                2.2 * s, b.lit and "60" or "FF", icon_fill_path("star", sx, cy - ss / 2, s))
+            if b.lit then
+                events[#events + 1] = string.format("{\\an7\\pos(0,0)\\p1\\bord0\\shad0\\1c&H%s&\\1a&H00&}%s{\\p0}",
+                    col, icon_fill_path("star", sx, cy - ss / 2, s))
+            end
+            events[#events + 1] = string.format(
+                "{\\an7\\pos(0,0)\\p1\\bord%.2f\\shad0\\1a&HFF&\\3c&H%s&\\3a&H00&}%s{\\p0}",
+                s, col, icon_path("star", sx, cy - ss / 2, s))
+            tx = sx + ss + 8 * k + text_w / 2
+        end
+        events[#events + 1] = string.format(
+            "{\\an5\\pos(%.1f,%.1f)\\bord%.2f\\shad0\\b1\\q2\\3c&H000000&\\3a&H60&\\1c&H%s&\\1a&H00&\\fs%.1f}%s",
+            tx, cy, 2 * k, col, fs, ass_text(b.text))
+        if b.lit then   -- a bar under the set state
+            local bw = (b.star and (ROW.star * k + 8 * k) or 0) + text_w
+            events[#events + 1] = string.format(
+                "{\\an7\\pos(0,0)\\p1\\bord%.2f\\shad0\\1c&H%s&\\1a&H00&\\3c&H000000&\\3a&H60&}m %.1f %.1f l %.1f %.1f l %.1f %.1f l %.1f %.1f{\\p0}",
+                1 * k, col, cx - bw / 2, cy + fs * 0.75, cx + bw / 2, cy + fs * 0.75,
+                cx + bw / 2, cy + fs * 0.75 + ROW.bar * k, cx - bw / 2, cy + fs * 0.75 + ROW.bar * k)
+        end
+        buttons[#buttons + 1] = {name = b.name, x0 = x, y0 = y, x1 = x + w, y1 = y + h, enabled = true}
+        x = x + w
+    end
+end
+
 -- Shown only while paused, so playback stays clean (screen shares, recordings)
-local function button_events(events, shot, vx0, vy0, vw, k)
+button_events = function(events, shot, vx0, vy0, vw, k)
     buttons = {}
     local list = mp.get_property_bool("pause") and shot_buttons(shot)
     if not list then return end
+    if list.row then return row_events(events, list, vx0, vy0, vw, k) end
     local d, gap = B.size * k, B.gap * k
     local x = vx0 + vw - B.right * k - (#list * d + (#list - 1) * gap)
     local y = vy0 + B.top * k
@@ -1519,6 +1580,7 @@ local function button_events(events, shot, vx0, vy0, vw, k)
             x_first - gap, y + d / 2, 2 * k, 24 * k, ass_text(tip))
     end
 end
+end  -- row_events / button_events
 
 local function clear_overlay()
     buttons = {}
@@ -2249,19 +2311,21 @@ end
 -- memory), a mark says what happens to it, and Save writes one file,
 -- <shots>/selects.json:
 --   {"saved": "...", "by": "...",
---    "shots": {"21": {"file": "shots/F_runs/v.012/21.mp4", "mark": "candidate", "note": ""}}}
+--    "shots": {"21": {"file": "shots/F_runs/v.012/21.mp4", "mark": "reroll", "note": ""}}}
 -- file is relative to the XML's folder and is always an original, never a copy;
--- mark is candidate / final / reroll / comp or null. Only shots with a choice
+-- mark is the shot's state: reroll / recirculate / comp / final, or null (an
+-- older "candidate" is kept as read but can't be set). Only shots with a choice
 -- are in it. The project's own scripts (review_save_cmds) then apply it to the
 -- folders and rebuild the XML; review_open_cmd rebuilds it before each open.
 
+-- The states, in the order of the row across the top (ASS colours are BGR)
 local MARKS = {
-    {name = "candidate", icon = "check", color = "C08A2E", text = "Accept as candidate", key = "c"},
-    {name = "final", icon = "check-check", color = "4F9E2E", text = "Accept as final", key = "a"},
-    {name = "reroll", icon = "rotate-ccw", color = "1E8CE0", text = "Mark for re-roll", key = "r"},
-    {name = "comp", icon = "layers", color = "C85A8C", text = "Mark for comp", key = "m"},
+    {name = "reroll", label = "re-roll", color = "1E8CE0", text = "Mark for re-roll", key = "r"},
+    {name = "recirculate", label = "re-circulate", color = "E0A040", text = "Mark for re-circulation", key = "c"},
+    {name = "comp", label = "comp", color = "D070B0", text = "Mark for comp", key = "m"},
+    {name = "final", label = "final", color = STAR.on, text = "Mark as final", key = "a", star = true},
 }
-local MARK_TEXT = {}
+local MARK_TEXT = {candidate = "Accept as candidate"}
 for _, m in ipairs(MARKS) do MARK_TEXT[m.name] = m.text end
 local review_busy = false
 
@@ -2413,34 +2477,28 @@ local function mark_of(r, shot)
     return nil
 end
 
--- "Accept as candidate" only means something on a run or a candidate (F_, I_)
-local function mark_fits(name, shot)
-    if name ~= "candidate" then return true end
-    local ri = rung_info(shot.file or shot.play)
-    return ri ~= nil and (ri.letter == "F" or ri.letter == "I")
-end
-
+-- The row across the top: one state per shot, the set one lit
 review_buttons = function(shot)
     local r = current_review()
     if not r or review_busy or not shot.rung or not shot.num or shot.missing or shot.retired then return nil end
     local cur = mark_of(r, shot)
-    local list = {}
+    local list = {row = true}
     for _, m in ipairs(MARKS) do
-        local ok = mark_fits(m.name, shot)
-        list[#list + 1] = {name = m.name, icon = m.icon, color = ok and m.color or BUTTON_COLORS.off,
-                           enabled = ok, dim = not ok, lit = cur == m.name, quiet = cur ~= m.name,
-                           text = m.text .. "  (" .. m.key .. ")"}
+        list[#list + 1] = {name = m.name, text = m.label, color = m.color, star = m.star, lit = cur == m.name}
     end
     return list
 end
 
--- The small line over the label: the mark, which version, where copies of it sit
+-- The small line over the label: which version, where copies of it sit (the
+-- row shows the state; only an older mark the row lacks is named here)
 review_detail = function(shot)
     local r = current_review()
     if not r then return shot.detail end
     local parts = {}
     local mark = mark_of(r, shot)
-    if mark then parts[#parts + 1] = MARK_TEXT[mark] or mark end
+    local in_row = false
+    for _, m in ipairs(MARKS) do if m.name == mark then in_row = true end end
+    if mark and not in_row then parts[#parts + 1] = MARK_TEXT[mark] or mark end
     if shot.detail then parts[#parts + 1] = shot.detail end
     if shot.copies and #shot.copies > 0 then parts[#parts + 1] = "in " .. table.concat(shot.copies, ", ") end
     return #parts > 0 and table.concat(parts, "  ·  ") or nil
@@ -2452,15 +2510,14 @@ local function set_mark(name)
     if not shot or not shot.rung or not shot.num or shot.missing or shot.retired then
         osd("nothing to mark here", 1.5); return
     end
-    if not mark_fits(name, shot) then
-        osd(MARK_TEXT[name] .. " only fits a run or a candidate", 2); return
-    end
     local file = slash(shot.file or shot.play)
     local new = mark_of(r, shot) ~= name and name or false
     r.marks[shot.num] = r.marks[shot.num] or {}
     r.marks[shot.num][file] = new
     r.touched[shot.num], r.cleared[shot.num] = true, nil
-    osd((shot.label or shot.name) .. "  ·  " .. (new and MARK_TEXT[new] or "mark cleared"), 2)
+    if not mp.get_property_bool("pause") then   -- the row is hidden while playing
+        osd((shot.label or shot.name) .. "  ·  " .. (new and MARK_TEXT[new] or "state cleared"), 2)
+    end
     render(true)
 end
 review_click = set_mark
@@ -2515,15 +2572,22 @@ local function review_changes(r)
 end
 
 local function short_line(s) return #s > 118 and (s:sub(1, 115) .. "…") or s end
+-- a script line the save card always keeps: a warning, or a next step the
+-- project prints for the marked shots ("to reroll: /go 07", "both in one run: ...")
+local function must_show(line)
+    return line:upper():find("WARNING", 1, true) ~= nil or line:match("^%s*to %a[%w%- ]*:") ~= nil
+           or line:match("^%s*both in one run:") ~= nil
+end
 
 local function show_result(r)
     local res = r.result
     r.result = nil
     if not res then return end
-    -- room for 16 lines: warnings and failures first claim, then the newest of the rest
+    -- room for 16 lines: warnings, failures and the next steps ("to reroll: ...")
+    -- first claim, then the newest of the rest
     local keep, room = {}, 16
     for i, line in ipairs(res.lines) do
-        if line:upper():find("WARNING", 1, true) or line:find("FAILED", 1, true) or line:find("not run:", 1, true) then
+        if must_show(line) or line:find("FAILED", 1, true) or line:find("not run:", 1, true) then
             keep[i] = true; room = room - 1
         end
     end
@@ -2615,7 +2679,7 @@ local function save_review(done)
             end
             -- its last lines, and every warning wherever it was printed
             for j, line in ipairs(lines) do
-                if j > #lines - 8 or line:upper():find("WARNING", 1, true) then report[#report + 1] = line end
+                if j > #lines - 8 or must_show(line) then report[#report + 1] = line end
             end
             step(i + 1)
         end)
