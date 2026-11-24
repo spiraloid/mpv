@@ -1885,6 +1885,9 @@ local function choose_version(asm, shot, path, note, pos)
     local r = reviews[asm.xml]
     if r then
         r.touched[shot.num], r.cleared[shot.num] = true, nil
+        -- a new select: the state and note were about the file before it, and
+        -- stepping back to that file doesn't bring them back
+        r.marks[shot.num], r.notes[shot.num] = {file = slash(path), mark = false}, ""
     elseif o.review_xml ~= "" then
         note = note .. "   (not saved: open " .. o.review_xml .. " to choose)"
     end
@@ -2543,12 +2546,13 @@ end
 
 -- marks ------------------------------------------------------------------------
 
--- The mark on what the slot shows: this session's, else the saved one
+-- The shot's state, which belongs to one file: this session's (r.marks[num] =
+-- {file, mark}), else the saved one; nil when the slot shows any other file
 local function mark_of(r, shot)
     if not shot.num then return nil end
     local file = slash(shot.file or shot.play or "")
     local mine = r.marks[shot.num]
-    if mine and mine[file] ~= nil then return mine[file] or nil end
+    if mine then return (mine.file == file and mine.mark) or nil end
     if r.cleared[shot.num] then return nil end
     local b = r.base[shot.num]
     if b and slash(abs_file(r, b.file)) == file then return b.mark end
@@ -2619,8 +2623,7 @@ local function set_mark(name)
     end
     local file = slash(shot.file or shot.play)
     local new = mark_of(r, shot) ~= name and name or false
-    r.marks[shot.num] = r.marks[shot.num] or {}
-    r.marks[shot.num][file] = new
+    r.marks[shot.num] = {file = file, mark = new}
     r.touched[shot.num], r.cleared[shot.num] = true, nil
     if not mp.get_property_bool("pause") then   -- the row is hidden while playing
         osd((shot.label or shot.name) .. "  ·  " .. (new and MARK_TEXT[new] or "state cleared"), 2)
