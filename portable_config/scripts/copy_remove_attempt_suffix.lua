@@ -603,6 +603,7 @@ local HELP = {
     {"Up / Down", "The shot's history: Up older (to the plate), Down newer (to the final)"},
     {"r / c / m / a", "Shot state: re-roll / re-circulate / comp / final   (again: clear)"},
     {"n", "Edit the shot's note   (setting a state opens it too)"},
+    {"i  /  Tab", "Import notes from a recorded review  /  step through them (Enter accepts)"},
     {"x", "Clear the shot's choice, note included"},
     {"Ctrl + Shift + s", "Save: the choices file, then the project's scripts"},
     {"Ctrl + s", "On a shot's first / last frame: NN_start.png / NN_end.png"},

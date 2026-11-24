@@ -37,6 +37,7 @@ local o = {
     review_save_cmds = "",
     review_reviewers = "",   -- under the XML's folder: {"logins": {login: name}}
     export_audio_clip = "",  -- id of an audio clip whose file is the rendered video's sound
+    review_notes_dir = "",   -- under the XML's folder: notes files from recorded reviews (i imports)
     real_pointer = true,     -- Mac: a click asks macOS where the pointer is (no: trust mpv; for tests)
 }
 options.read_options(o, "shot_jump")
@@ -1593,6 +1594,45 @@ local function row_events(events, list, vx0, vy0, vw, k)
     local function esc(s)   -- braces would start a tag; a backslash gets a zero-width space after it
         return (s:gsub("[{}]", "\\%0"):gsub("\\([^{}])", "\\\226\128\139%1"):gsub("\\$", "\\\226\128\139"))
     end
+    if list.step and not list.box then   -- an imported note, being stepped through
+        local st = list.step
+        local bw, fs = 1100 * k, 26 * k
+        local x0, y0 = vx0 + (vw - bw) / 2, y + h + 8 * k
+        -- long notes wrap inside the panel (at most four lines each)
+        local function wrapped(s, width)
+            local out, line = {}, ""
+            for word in s:gmatch("%S+") do
+                local n = 0
+                for _ in (line .. " " .. word):gmatch("[%z\1-\127\194-\244][\128-\191]*") do n = n + 1 end
+                if line ~= "" and n > width then out[#out + 1] = line; line = word
+                else line = line == "" and word or (line .. " " .. word) end
+            end
+            if line ~= "" then out[#out + 1] = line end
+            if #out > 4 then out = {out[1], out[2], out[3], out[4] .. " …"} end
+            return out
+        end
+        local rows = {{string.format("imported %d of %d%s", st.k, st.n, st.reviewer and ("  ·  " .. st.reviewer) or ""), "909090", 20 * k}}
+        for _, l in ipairs(wrapped(st.text, 92)) do rows[#rows + 1] = {l, "FFFFFF", fs} end
+        if st.stale then rows[#rows + 1] = {"note was for " .. st.stale .. "  ·  Enter puts it on this version  ·  x skips", "40C0FF", 21 * k} end
+        if st.saved then
+            for i, l in ipairs(wrapped("saved: " .. st.saved, 110)) do rows[#rows + 1] = {l, "B0B0B0", 21 * k} end
+        end
+        rows[#rows + 1] = {"Enter accepts  ·  n edits  ·  r c m a state  ·  x skips  ·  Tab next  ·  Esc stops", "909090", 19 * k}
+        local bh = 14 * k
+        for _, rw in ipairs(rows) do bh = bh + rw[3] * 1.35 end
+        events[#events + 1] = string.format(
+            "{\\an7\\pos(0,0)\\p1\\bord%.2f\\shad0\\1c&H000000&\\1a&H40&\\3c&HFFFFFF&\\3a&H90&}m %.1f %.1f l %.1f %.1f %.1f %.1f %.1f %.1f{\\p0}",
+            1.5 * k, x0, y0, x0 + bw, y0, x0 + bw, y0 + bh, x0, y0 + bh)
+        local ty = y0 + 8 * k
+        for _, rw in ipairs(rows) do
+            local s = rw[1]
+            if #s > 150 then s = s:sub(1, 147):gsub("[\128-\191]*$", ""):gsub("[\192-\255]$", "") .. "…" end
+            events[#events + 1] = string.format(
+                "{\\an7\\pos(%.1f,%.1f)\\bord0\\shad0\\q2\\1c&H%s&\\1a&H00&\\fs%.1f}%s", x0 + 16 * k, ty, rw[2], rw[3], esc(s))
+            ty = ty + rw[3] * 1.35
+        end
+        return
+    end
     if list.box then   -- the note box, open on this shot
         local bx = list.box
         local bw, bh, fs = 1000 * k, 50 * k, 28 * k
@@ -2032,6 +2072,7 @@ local function choose_version(asm, shot, path, note, pos)
         -- stepping back to that file doesn't bring them back
         r.marks[shot.num], r.notes[shot.num] = {file = slash(path), mark = false}, ""
         r.by = r.by or {}; r.by[shot.num] = false
+        if r.imported and r.imported[shot.num] then r.imported[shot.num].applied = false end
     elseif o.review_xml ~= "" then
         note = note .. "   (not saved: open " .. o.review_xml .. " to choose)"
     end
@@ -2735,7 +2776,7 @@ local function json_str(s)
     end) .. '"'
 end
 
-local function selects_text(shots)
+local function selects_text(shots, imported)
     local nums = {}
     for num in pairs(shots) do nums[#nums + 1] = num end
     table.sort(nums)
@@ -2746,9 +2787,12 @@ local function selects_text(shots)
             json_str(e.file), e.mark and json_str(e.mark) or "null", json_str(e.note or ""),
             e.by and (', "by": ' .. json_str(e.by)) or "")
     end
-    return string.format('{\n "saved": %s,\n "by": %s,\n "shots": {\n%s\n }\n}\n',
+    local imp = {}
+    for _, f in ipairs(imported or {}) do imp[#imp + 1] = json_str(f) end
+    return string.format('{\n "saved": %s,\n "by": %s,%s\n "shots": {\n%s\n }\n}\n',
         json_str(os.date("!%Y-%m-%dT%H:%M:%SZ")),
         json_str(os.getenv("USER") or os.getenv("USERNAME") or ""),
+        #imp > 0 and ('\n "imported": [' .. table.concat(imp, ", ") .. '],') or "",
         table.concat(rows, ",\n"))
 end
 
@@ -2949,7 +2993,9 @@ function notes.close(keep)
     notes.box = nil
     for _, name in ipairs(notes.keys) do mp.remove_key_binding(name) end
     notes.keys = {}
-    if keep then
+    if keep and b.on_keep then
+        b.on_keep(trim(table.concat(b.chars):gsub("[%c]+", " ")))
+    elseif keep then
         local text = trim(table.concat(b.chars):gsub("[%c]+", " "))
         if text ~= notes.of(b.r, b.num) then
             b.r.notes[b.num] = text
@@ -2960,13 +3006,13 @@ function notes.close(keep)
     render(true)
 end
 
-function notes.edit(shot)
+function notes.edit(shot, prefill, on_keep)
     local r = current_review()
     if not r or review_busy or export.prompting or not shot or not shot.num or in_preview(r) then return end
     if notes.box then notes.close(true) end
     mp.set_property_bool("pause", true)   -- the row, and so the box, shows while paused
-    local chars = notes.chars(notes.of(r, shot.num))
-    notes.box = {r = r, num = shot.num, chars = chars, pos = #chars}
+    local chars = notes.chars(prefill or notes.of(r, shot.num))
+    notes.box = {r = r, num = shot.num, chars = chars, pos = #chars, on_keep = on_keep}
     local b = notes.box
     local function insert(s)
         for _, ch in ipairs(notes.chars(s)) do
@@ -3004,6 +3050,213 @@ function notes.edit(shot)
     render(true)
 end
 
+-- Imported notes ---------------------------------------------------------------
+-- i brings in a notes file from review_notes_dir (the project writes one per
+-- recorded review: {"reviewer", "source", "shots": {"07": {"file", "label",
+-- "note", "mark"}}, "general": [...]}), the newest one not imported yet; i again
+-- takes the next older. A note whose shot still plays the version it was made on,
+-- and has no note or state yet, goes straight in, as if typed. The rest wait:
+-- the shot has its own note or state, or its select moved on since (stale).
+-- Tab / Shift+Tab step through them: Enter accepts (onto the version showing),
+-- n edits the text, r / c / m / a choose the state, x skips, Esc stops.
+-- Save records the file in selects.json's "imported" so it isn't offered again.
+function notes.read_imported(r)
+    local text = r.shots and read_file(selects_path(r))
+    local j = text and utils.parse_json(text)
+    local out = {}
+    if type(j) == "table" and type(j.imported) == "table" then
+        for _, f in ipairs(j.imported) do if type(f) == "string" then out[#out + 1] = f end end
+    end
+    return out
+end
+
+function notes.shot_for(num)
+    for i, s in ipairs(state.shots or {}) do if s.num == num then return s, i end end
+end
+
+-- put the imported note (and its state) on the version the shot shows
+function notes.apply(r, shot, it)
+    local num, file = shot.num, slash(shot.file or shot.play or "")
+    r.notes[num] = it.text
+    r.marks[num] = {file = file, mark = it.mark or false}
+    r.touched[num], r.cleared[num] = true, nil
+    notes.touch(r, num)
+    it.applied = true
+end
+
+function notes.import()
+    local r = current_review()
+    if not r or review_busy or export.prompting or in_preview(r) then return end
+    if o.review_notes_dir == "" then osd("no notes folder set (review_notes_dir in shot_jump.conf)", 4); return end
+    local rel_dir = slash(o.review_notes_dir):gsub("/+$", "")
+    local dir = utils.join_path(r.root, native_seps(rel_dir))
+    local files = {}
+    for _, f in ipairs(utils.readdir(dir, "files") or {}) do
+        if f:lower():match("%.json$") then files[#files + 1] = f end
+    end
+    table.sort(files, function(a, b) return a > b end)   -- MM-DD__HHMM_name: newest first
+    local seen = {}
+    for _, f in ipairs(r.base_imported or {}) do seen[f] = true end
+    for _, f in ipairs(r.session_imported or {}) do seen[f] = true end
+    local name
+    for _, f in ipairs(files) do
+        if not seen[rel_dir .. "/" .. f] then name = f; break end
+    end
+    if not name then osd("no notes left to import in " .. rel_dir, 3); return end
+    local j = utils.parse_json(read_file(utils.join_path(dir, name)) or "")
+    if type(j) ~= "table" or type(j.shots) ~= "table" then osd("can't read " .. name, 4); return end
+    r.session_imported = r.session_imported or {}
+    r.session_imported[#r.session_imported + 1] = rel_dir .. "/" .. name
+    r.imported = r.imported or {}
+    local attached, waiting, missing = 0, 0, 0
+    for num, e in pairs(j.shots) do
+        num = tostring(num)
+        local shot = notes.shot_for(num)
+        if type(e) == "table" and type(e.note) == "string" and shot and shot.rung then
+            local mark = type(e.mark) == "string" and e.mark or nil
+            local known = false
+            for _, m in ipairs(MARKS) do if m.name == mark then known = true end end
+            local it = {text = trim(e.note:gsub("[%c]+", " ")), mark = known and mark or nil,
+                        file = type(e.file) == "string" and slash(abs_file(r, e.file)) or nil,
+                        label = type(e.label) == "string" and e.label or num,
+                        reviewer = type(j.reviewer) == "string" and j.reviewer or nil}
+            local cur = slash(shot.file or shot.play or "")
+            local own = notes.of(r, num) ~= "" or mark_of(r, shot) ~= nil
+            if (not it.file or it.file == cur) and not own then
+                notes.apply(r, shot, it)
+                attached = attached + 1
+            else
+                waiting = waiting + 1
+            end
+            r.imported[num] = it
+        else
+            missing = missing + 1
+        end
+    end
+    local lines = {string.format("%s  ·  from %s  ·  %d shot%s", name, tostring(j.reviewer or "unknown"),
+                                 attached + waiting, attached + waiting == 1 and "" or "s"),
+                   string.format("%d went onto the version they were made on.  %d wait for you: Tab steps through them.",
+                                 attached, waiting)}
+    if missing > 0 then lines[#lines + 1] = missing .. " named a shot that isn't in this review" end
+    for _, g in ipairs(type(j.general) == "table" and j.general or {}) do
+        if type(g) == "string" then
+            g = g:gsub("[%c]+", " ")
+            lines[#lines + 1] = "·  " .. (#g > 115 and (g:sub(1, 112) .. "…") or g)
+        end
+    end
+    open_modal({title = "Notes imported", title_fs = 64, lines = lines,
+                choices = {{label = "OK", keys = {"o", "O", "y", "Y", "SPACE"}}}, default = 1, cancel = 1,
+                done = function() render(true) end})
+end
+
+-- the imported shots in the order they play
+function notes.order(r)
+    local out, seen = {}, {}
+    for _, s in ipairs(state.shots or {}) do
+        if s.num and not seen[s.num] and r.imported and r.imported[s.num] then
+            seen[s.num] = true
+            out[#out + 1] = s.num
+        end
+    end
+    return out
+end
+
+notes.step_bound = false
+function notes.step_keys(on)
+    if on == notes.step_bound then return end
+    notes.step_bound = on
+    local list = {{"ENTER", function() notes.step_accept() end}, {"KP_ENTER", function() notes.step_accept() end},
+                  {"ESC", function() notes.step_stop() end}}
+    for _, b in ipairs(list) do
+        if on then mp.add_forced_key_binding(b[1], "shot_step_" .. b[1], b[2])
+        else mp.remove_key_binding("shot_step_" .. b[1]) end
+    end
+end
+
+function notes.step_stop()
+    local r = current_review()
+    if r then r.step = nil end
+    notes.step_keys(false)
+    render(true)
+end
+
+function notes.step(dir)
+    local r = current_review()
+    if not r or review_busy or export.prompting or in_preview(r) then return end
+    if notes.box then notes.close(true) end
+    local order = notes.order(r)
+    if #order == 0 then osd("no imported notes: i imports one", 2); return end
+    local cur = current_shot()
+    local here = 0
+    for i, num in ipairs(order) do if cur and num == cur.num then here = i end end
+    local target
+    if not r.step and here > 0 and not r.imported[order[here]].done then
+        target = order[here]   -- the shot on screen has one waiting: start there
+    else
+        if here == 0 then here = dir > 0 and 0 or #order + 1 end
+        for n = 1, #order do
+            local i = (here - 1 + dir * n) % #order + 1
+            if not r.imported[order[i]].done then target = order[i]; break end
+        end
+    end
+    if not target then osd("every imported note has been reviewed", 2); notes.step_stop(); return end
+    local _, idx = notes.shot_for(target)
+    r.step = target
+    notes.step_keys(true)
+    if idx and (not cur or cur.num ~= target) then jump_to(idx) end
+    mp.set_property_bool("pause", true)
+    render(true)
+end
+
+-- the stepped shot, if the shot on screen is it
+function notes.stepping(r, shot)
+    return r and shot and r.step and r.step == shot.num and r.imported and r.imported[shot.num] or nil
+end
+
+function notes.step_accept(text)
+    local r, shot = current_review(), current_shot()
+    local it = notes.stepping(r, shot)
+    if not it then return notes.step_stop() end
+    if text then it.text = text end
+    notes.apply(r, shot, it)
+    it.done = true
+    notes.step(1)
+end
+
+function notes.step_skip()
+    local r, shot = current_review(), current_shot()
+    local it = notes.stepping(r, shot)
+    if not it then return end
+    if it.applied then   -- it went in at import: take it back out
+        r.notes[shot.num], r.marks[shot.num] = nil, nil
+        if r.by then r.by[shot.num] = nil end
+        it.applied = false
+    end
+    it.done = true
+    notes.step(1)
+end
+
+function notes.step_mark(name)
+    local r, shot = current_review(), current_shot()
+    local it = notes.stepping(r, shot)
+    if not it then return false end
+    it.mark = it.mark ~= name and name or nil
+    if it.applied then
+        r.marks[shot.num] = {file = slash(shot.file or shot.play or ""), mark = it.mark or false}
+        notes.touch(r, shot.num)
+    end
+    render(true)
+    return true
+end
+
+function notes.step_edit()
+    local r, shot = current_review(), current_shot()
+    local it = notes.stepping(r, shot)
+    if not it then return false end
+    notes.edit(shot, it.text, function(text) notes.step_accept(text) end)
+    return true
+end
+
 -- The row across the top: one state per shot, the set one lit
 review_buttons = function(shot)
     local r = current_review()
@@ -3011,6 +3264,17 @@ review_buttons = function(shot)
     if r.preview then return {row = true, preview = "PREVIEW  ·  " .. lock.who(r.preview) .. "  ·  nothing can be saved"} end
     local cur = mark_of(r, shot)
     local list = {row = true, note = notes.of(r, shot.num), by = cur and notes.by_of(r, shot.num) or nil}
+    local it = notes.stepping(r, shot)
+    if it then
+        local order, k = notes.order(r), 0
+        for i, num in ipairs(order) do if num == shot.num then k = i end end
+        local cur_file = slash(shot.file or shot.play or "")
+        local saved = r.base[shot.num] and r.base[shot.num].note or ""
+        list.step = {text = it.text, k = k, n = #order, reviewer = it.reviewer,
+                     stale = it.file and it.file ~= cur_file and it.label or nil,
+                     saved = (saved ~= "" and saved ~= it.text) and saved or nil}
+        if not it.applied then cur, list.by = it.mark, nil end   -- the row shows the state it would get
+    end
     local b = notes.box
     if b and b.num == shot.num then
         list.box = {num = b.num, before = table.concat(b.chars, "", 1, b.pos),
@@ -3043,6 +3307,7 @@ local function set_mark(name)
     if not shot or not shot.rung or not shot.num or shot.missing or shot.retired then
         osd("nothing to mark here", 1.5); return
     end
+    if notes.step_mark(name) then return end   -- stepping an imported note: its state
     local file = slash(shot.file or shot.play)
     local new = mark_of(r, shot) ~= name and name or false
     r.marks[shot.num] = {file = file, mark = new}
@@ -3061,6 +3326,7 @@ review_click = set_mark
 local function clear_choice()
     local r, shot, asm = current_review(), current_shot(), state.assembly
     if not r or review_busy or export.prompting or not shot or not shot.rung or not shot.num or in_preview(r) then return end
+    if notes.stepping(r, shot) then return notes.step_skip() end   -- stepping: x skips the imported note
     r.marks[shot.num], r.notes[shot.num] = nil, nil
     local top = top_version(shot.rung.shots, shot.rung.nn, {})
     if top and slash(top) ~= slash(shot.play or "") then
@@ -3162,7 +3428,7 @@ local function save_review(done)
         lock.take(r.xml)
     end
     local changes = review_changes(r)
-    if #changes == 0 then
+    if #changes == 0 and not (r.session_imported and #r.session_imported > 0) then
         if done then done(true) else osd("nothing to save", 1.5) end
         return
     end
@@ -3175,10 +3441,16 @@ local function save_review(done)
         end
         shots[c.num] = c.entry and {file = rel, mark = c.entry.mark, note = c.entry.note, by = c.entry.by} or nil
     end
-    if not write_file(selects_path(r), selects_text(shots)) then
+    -- the notes files imported so far: the ones already listed and this session's
+    local imported, seen = {}, {}
+    for _, list in ipairs({notes.read_imported(r), r.session_imported or {}}) do
+        for _, f in ipairs(list) do if not seen[f] then seen[f] = true; imported[#imported + 1] = f end end
+    end
+    if not write_file(selects_path(r), selects_text(shots, imported)) then
         osd("could not write " .. name_of(selects_path(r)), 4); return
     end
     r.base, r.marks, r.touched, r.cleared, r.notes, r.by = read_selects(r), {}, {}, {}, {}, {}
+    r.base_imported, r.session_imported = imported, {}
     local report = {string.format("%s: %d shot%s changed", name_of(selects_path(r)), #changes, #changes == 1 and "" or "s")}
     msg.info("review saved: " .. selects_path(r))
 
@@ -3272,7 +3544,11 @@ local review_keys = false
 local function bind_review_keys(on)
     if on == review_keys or encoding then return end
     review_keys = on
-    local list = {{"x", "clear", clear_choice}, {"n", "note", function() notes.edit(current_shot()) end}}
+    local list = {{"x", "clear", clear_choice},
+                  {"n", "note", function() if not notes.step_edit() then notes.edit(current_shot()) end end},
+                  {"i", "import", function() notes.import() end},
+                  {"TAB", "step_next", function() notes.step(1) end},
+                  {"Shift+TAB", "step_prev", function() notes.step(-1) end}}
     for _, m in ipairs(MARKS) do
         list[#list + 1] = {m.key, m.name, function() set_mark(m.name) end}
     end
@@ -3327,7 +3603,7 @@ review_loaded = function(asm)
             if shot.rung then r.shots = shot.rung.shots; break end
         end
     end
-    if not r.base then r.base = read_selects(r) end
+    if not r.base then r.base = read_selects(r); r.base_imported = notes.read_imported(r) end
     local cache = {}
     for _, shot in ipairs(asm.shots) do
         if shot.rung and shot.play then
