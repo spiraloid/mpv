@@ -938,6 +938,7 @@ end
 -- Returns {fixable = {lines}, notes = {lines}}. Fixable means Regenerate resolves it.
 local function validate(asm, seq, xml_path)
     local fix, notes = {}, {}
+    local targets = {}   -- file_key -> the file Regenerate points that slot at
     local xml_dir = dir_of(xml_path)
     local cache = {}
     -- When the XML was last saved: a newer version that already existed then was
@@ -974,11 +975,12 @@ local function validate(asm, seq, xml_path)
             local nri = named and rung_info(named)
             local alt = nri and top_version(nri.shots, nri.nn, cache)
             local line = string.format("%s: no file at %s", who(c), short_path(named or "?", xml_dir))
-            if alt then fix[#fix + 1] = line .. "; latest is " .. version_text(alt)
+            if alt then fix[#fix + 1] = line .. "; latest is " .. version_text(alt); targets[c.file_key] = alt
             else notes[#notes + 1] = line .. " (no other version of the shot)" end
         elseif c.how == "walked" then
             fix[#fix + 1] = string.format("%s: names %s, which is retired or gone; playing %s",
                 who(c), short_path(named, xml_dir), version_text(c.resolved))
+            targets[c.file_key] = c.resolved   -- keep what's on screen
         elseif c.how == "rejected" and c.enabled then
             fix[#fix + 1] = string.format("%s: every version is retired, but the XML still plays it", who(c))
         end
@@ -987,7 +989,7 @@ local function validate(asm, seq, xml_path)
             if top and slash(top) ~= slash(c.resolved) then
                 local tinfo = utils.file_info(top)
                 local line = string.format("%s: plays %s; latest is %s", who(c), version_text(c.resolved), version_text(top))
-                if tinfo and (tinfo.mtime or 0) > saved_at then fix[#fix + 1] = line
+                if tinfo and (tinfo.mtime or 0) > saved_at then fix[#fix + 1] = line; targets[c.file_key] = top
                 else notes[#notes + 1] = line .. " (picked over it when the XML was saved)" end
             end
         end
@@ -1028,11 +1030,12 @@ local function validate(asm, seq, xml_path)
     end
     for _, l in ipairs(fix) do msg.warn("validation: " .. l) end
     for _, l in ipairs(notes) do msg.info("validation note: " .. l) end
-    return {fixable = fix, notes = notes}
+    return {fixable = fix, notes = notes, targets = targets}
 end
 
--- Point every rung slot at its shot's latest state. Runs in on_load like the
--- other actions; timing, soundtrack and non-rung slots are left alone.
+-- Re-point the slots the check flagged (p.targets: file_key -> file), or with no
+-- targets every rung slot at its shot's latest state. Runs in on_load like the
+-- other actions; timing, soundtrack, non-rung slots and kept picks are left alone.
 local function do_regen(p)
     local text = read_file(p.xml)
     if not text then osd("regenerate failed: could not read the XML", 3); return end
@@ -1042,8 +1045,9 @@ local function do_regen(p)
     local cache, changed, new_text = {}, 0, text
     for _, c in ipairs(seq.video) do
         local ri = c.path and rung_info(c.path)
-        if ri then
-            local top = top_version(ri.shots, ri.nn, cache)
+        if ri and (not p.targets or p.targets[c.file_key]) then
+            local top = p.targets and p.targets[c.file_key] or top_version(ri.shots, ri.nn, cache)
+            if top and not exists(top) then top = nil end
             local live = exists(live_path(ri)) and live_path(ri)
             if top and (not live or slash(top) ~= slash(live) or not c.enabled) then
                 local label = c.label and xml_unescape(c.label)
@@ -1061,7 +1065,7 @@ local function do_regen(p)
     if not write_file(p.xml, new_text) then osd("regenerate failed: could not write the XML", 3); return end
     session.journal[#session.journal + 1] = {xml_edit = p.xml}
     msg.info(string.format("regenerated %s: %d slot(s) re-pointed", p.xml, changed))
-    p.notice = string.format("XML regenerated: %d slot%s re-pointed to the latest version", changed, changed == 1 and "" or "s")
+    p.notice = string.format("XML regenerated: %d slot%s re-pointed", changed, changed == 1 and "" or "s")
 end
 
 local function run_action(action)
@@ -2360,8 +2364,8 @@ show_validation = function(asm)
         lines[#lines + 1] = string.format("… and %d more (see the mpv log)", more)
     end
     lines[#lines + 1] = ""
-    lines[#lines + 1] = "Regenerate points every shot at its latest version (newest file in the highest rung)."
-    lines[#lines + 1] = "Timing, soundtrack and other slots stay.  Answering No when you quit undoes it."
+    lines[#lines + 1] = "Regenerate re-points only the slots listed above.  Picks you kept, timing and soundtrack stay."
+    lines[#lines + 1] = "Answering No when you quit undoes it."
     open_modal({
         title = "This XML doesn't match the folders", title_fs = 64, button_w = 300,
         lines = lines,
@@ -2370,7 +2374,8 @@ show_validation = function(asm)
         hint = "R  regenerate   ·   I or Esc  ignore   ·   ← →  then Enter",
         done = function(i)
             if i == 1 then
-                pending_action = {kind = "regen", xml = asm.xml, pos = mp.get_property_number("time-pos") or 0}
+                pending_action = {kind = "regen", xml = asm.xml, targets = iss.targets,
+                                  pos = mp.get_property_number("time-pos") or 0}
                 mp.commandv("loadfile", state.path, "replace")
             else
                 render(true)

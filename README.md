@@ -191,7 +191,7 @@ If anything turns up that a regenerate would fix, a card lists it (everything al
 
 | Choice | Key | Does |
 |--------|-----|------|
-| **Regenerate XML** | `R` | Point every rung slot at its shot's latest version, with matching labels. Timing, soundtrack and slots outside the rungs stay as they are. |
+| **Regenerate XML** | `R` | Re-point only the slots the card lists, with matching labels: a slot whose file is gone keeps what's playing in its place, and a slot with a newer version since the last save gets that version. Picks you kept, timing, soundtrack and slots outside the rungs stay as they are. |
 | **Ignore** (default) | `I`, `Esc` or `Enter` | Play the XML as it is. |
 
 Regenerating counts as a change: answer **No** when you quit and the XML goes back exactly as it was.
