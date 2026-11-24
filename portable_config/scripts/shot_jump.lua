@@ -36,6 +36,7 @@ local o = {
     review_open_cmd = "",
     review_save_cmds = "",
     review_reviewers = "",   -- under the XML's folder: {"logins": {login: name}}
+    export_audio_clip = "",  -- id of an audio clip whose file is the rendered video's sound
 }
 options.read_options(o, "shot_jump")
 
@@ -291,7 +292,14 @@ local function parse_xmeml(text, base_dir)
         elseif between:find("<video>", 1, true) then kind = "video" end
         prev_e = tb.e + 1
         local list = kind and seq[kind]
-        if list and #list == 0 and tb.body:find("<clipitem", 1, true) then
+        if list and #list > 0 and kind == "audio" and tb.body:find("<clipitem", 1, true) then
+            -- a later audio track: kept only for the render's sound (export_audio_clip)
+            seq.audio_more = seq.audio_more or {}
+            local offset = media_s - 1 + tb.bs - 1
+            for _, cb in ipairs(blocks(tb.body, "clipitem")) do
+                seq.audio_more[#seq.audio_more + 1] = parse_clip(cb, files, fps, base_dir, offset)
+            end
+        elseif list and #list == 0 and tb.body:find("<clipitem", 1, true) then
             local offset = media_s - 1 + tb.bs - 1
             local items = {}
             for _, cb in ipairs(blocks(tb.body, "clipitem")) do
@@ -623,7 +631,21 @@ local function build_assembly(xml_path, seq)
 
     local soundtrack = false
     local asegs = {}
-    for _, c in ipairs(seq.audio) do
+    -- the render takes its sound from the clip named by export_audio_clip (say,
+    -- the approved edit's own audio, kept disabled so an editor doesn't hear it
+    -- under the voice), and plays the first audio track otherwise
+    local audio, export_sound = seq.audio, nil
+    if o.export_audio_clip ~= "" then
+        for _, c in ipairs(seq.audio_more or {}) do
+            if c.id == o.export_audio_clip and c.path and exists(c.path) then export_sound = c end
+        end
+    end
+    if encoding and export_sound then
+        audio = {export_sound}
+        export_sound.enabled = true
+        msg.info("render sound: " .. export_sound.path)
+    end
+    for _, c in ipairs(audio) do
         local len = (c.out and c["in"]) and (c.out - c["in"]) / c.fps or 0
         if len > 0 and c.path and exists(c.path) and c.enabled then
             asegs[#asegs + 1] = q(c.path) .. ",start=" .. num((c["in"] or 0) / c.fps) .. ",length=" .. num(len)
@@ -637,6 +659,7 @@ local function build_assembly(xml_path, seq)
     return {
         xml = xml_path, seq = seq, edl = edl, shots = shots, blank = blank,
         soundtrack = soundtrack, missing = missing, retired = retired, fps = seq.fps,
+        export_sound = export_sound ~= nil,
         review_layout = review_layout,
     }
 end
@@ -2116,7 +2139,9 @@ local function export_args(xml, out)
         "--o=" .. out, "--of=mp4", "--ovc=libx264",
         "--ovcopts=crf=18,preset=medium,profile=high,colorspace=bt709,color_primaries=bt709,color_trc=bt709",
         "--oac=aac", "--oacopts=b=64k", "--audio-samplerate=48000",
-        "--audio-channels=" .. (export.channels == 1 and "mono" or "auto-safe"),
+        -- a mono voice track renders mono; the render's own sound (export_audio_clip) keeps its channels
+        "--audio-channels=" .. ((export.channels == 1 and not (state.assembly and state.assembly.export_sound))
+                                and "mono" or "auto-safe"),
         "--sub-ass-override=no", "--sub-visibility=yes", "--", xml,
     }
 end
