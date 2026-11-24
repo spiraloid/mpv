@@ -1537,6 +1537,14 @@ local function row_events(events, list, vx0, vy0, vw, k)
         buttons[#buttons + 1] = {name = b.name, x0 = x, y0 = y, x1 = x + w, y1 = y + h, enabled = true}
         x = x + w
     end
+    if list.note and list.note ~= "" then   -- the shot's note, under the row
+        local note = list.note
+        if #note > 140 then note = note:sub(1, 137):gsub("[\128-\191]*$", ""):gsub("[\192-\255]$", "") .. "…" end
+        note = note:gsub("[{}]", "\\%0"):gsub("\\([^{}])", "\\\226\128\139%1")
+        events[#events + 1] = string.format(
+            "{\\an8\\pos(%.1f,%.1f)\\bord%.2f\\shad0\\q0\\3c&H000000&\\3a&H50&\\1c&HFFFFFF&\\1a&H00&\\fs%.1f}%s",
+            vx0 + vw / 2, y + h + 6 * k, 2 * k, 28 * k, note)
+    end
 end
 
 -- Shown only while paused, so playback stays clean (screen shares, recordings)
@@ -2547,12 +2555,41 @@ local function mark_of(r, shot)
     return nil
 end
 
+-- A shot's note: one line of plain text saved in its entry's "note". This
+-- session's edit, else the saved one.
+local notes = {}
+function notes.of(r, num)
+    if r.notes[num] ~= nil then return r.notes[num] end
+    local b = r.base and r.base[num]
+    return b and b.note or ""
+end
+
+-- the note box: pre-filled with the shot's note; Enter keeps the text, Esc
+-- leaves the note as it was
+function notes.edit(shot)
+    local r = current_review()
+    if not r or review_busy or export.prompting or not shot or not shot.num then return end
+    local num = shot.num
+    require("mp.input").get({
+        prompt = "Notes for " .. num .. " (Enter to save, Esc to skip): ",
+        default_text = notes.of(r, num),
+        submit = function(text)
+            text = trim((text or ""):gsub("[\r\n]+", " "))
+            if text ~= notes.of(r, num) then
+                r.notes[num] = text
+                r.touched[num], r.cleared[num] = true, nil
+            end
+            render(true)
+        end,
+    })
+end
+
 -- The row across the top: one state per shot, the set one lit
 review_buttons = function(shot)
     local r = current_review()
     if not r or review_busy or not shot.rung or not shot.num or shot.missing or shot.retired then return nil end
     local cur = mark_of(r, shot)
-    local list = {row = true}
+    local list = {row = true, note = notes.of(r, shot.num)}
     for _, m in ipairs(MARKS) do
         list[#list + 1] = {name = m.name, text = m.label, color = m.color, star = m.star, lit = cur == m.name}
     end
@@ -2589,6 +2626,7 @@ local function set_mark(name)
         osd((shot.label or shot.name) .. "  ·  " .. (new and MARK_TEXT[new] or "state cleared"), 2)
     end
     render(true)
+    if new then notes.edit(shot) end   -- a state set: what the room said about it
 end
 review_click = set_mark
 
@@ -2597,7 +2635,7 @@ review_click = set_mark
 local function clear_choice()
     local r, shot, asm = current_review(), current_shot(), state.assembly
     if not r or review_busy or export.prompting or not shot or not shot.rung or not shot.num then return end
-    r.marks[shot.num] = nil
+    r.marks[shot.num], r.notes[shot.num] = nil, nil
     local top = top_version(shot.rung.shots, shot.rung.nn, {})
     if top and slash(top) ~= slash(shot.play or "") then
         choose_version(asm, shot, top, "choice cleared: " .. rung_label(rung_info(top), shot.num_text))
@@ -2619,8 +2657,9 @@ local function review_entry(r, shot)
     local mark = mark_of(r, shot)
     local b = r.base[shot.num]
     -- never chosen and not marked: only a version other than the XML's own is a choice
-    if not b and not mark and slash(file) == slash(shot.xml_orig or "") then return nil end
-    return {file = file, mark = mark, note = b and b.note or ""}
+    local note = notes.of(r, shot.num)
+    if not b and not mark and note == "" and slash(file) == slash(shot.xml_orig or "") then return nil end
+    return {file = file, mark = mark, note = note}
 end
 
 -- This session's shots whose entry differs from the saved one: {num, entry}
@@ -2633,7 +2672,8 @@ local function review_changes(r)
             local e, b = review_entry(r, shot), r.base[num]
             local same
             if not e or not b then same = (e == nil and b == nil)
-            else same = slash(abs_file(r, b.file)) == slash(e.file) and b.mark == e.mark end
+            else same = slash(abs_file(r, b.file)) == slash(e.file) and b.mark == e.mark
+                        and (b.note or "") == (e.note or "") end
             if not same then out[#out + 1] = {num = num, entry = e} end
         end
     end
@@ -2700,7 +2740,7 @@ local function save_review(done)
     if not write_file(selects_path(r), selects_text(shots)) then
         osd("could not write " .. name_of(selects_path(r)), 4); return
     end
-    r.base, r.marks, r.touched, r.cleared = read_selects(r), {}, {}, {}
+    r.base, r.marks, r.touched, r.cleared, r.notes = read_selects(r), {}, {}, {}, {}
     local report = {string.format("%s: %d shot%s changed", name_of(selects_path(r)), #changes, #changes == 1 and "" or "s")}
     msg.info("review saved: " .. selects_path(r))
 
@@ -2782,7 +2822,7 @@ local review_keys = false
 local function bind_review_keys(on)
     if on == review_keys or encoding then return end
     review_keys = on
-    local list = {{"x", "clear", clear_choice}}
+    local list = {{"x", "clear", clear_choice}, {"n", "note", function() notes.edit(current_shot()) end}}
     for _, m in ipairs(MARKS) do
         list[#list + 1] = {m.key, m.name, function() set_mark(m.name) end}
     end
@@ -2802,7 +2842,7 @@ end
 review_open = function(xml_path)
     if o.review_xml == "" or name_of(xml_path):lower() ~= o.review_xml:lower() then return end
     if reviews[xml_path] then return end
-    local r = {xml = xml_path, root = dir_of(xml_path), marks = {}, touched = {}, cleared = {}}
+    local r = {xml = xml_path, root = dir_of(xml_path), marks = {}, touched = {}, cleared = {}, notes = {}}
     reviews[xml_path] = r
     if o.review_open_cmd == "" then return end
     local args, why = tools.args(r.root, o.review_open_cmd)

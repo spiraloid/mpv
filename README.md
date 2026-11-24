@@ -116,8 +116,9 @@ Press `h` in mpv for the same list on screen.
 | `WHEEL_UP` / `WHEEL_DOWN` | Previous / next shot, one per notch (XML) |
 | `UP` / `DOWN` | XML in rung folders: the shot's history. `UP` older (to the cleaned plate), `DOWN` newer (to the final). Pauses on the shot if it was playing |
 | `o` | Show / hide the shot label and buttons (outside an XML: mpv's progress bar) |
-| `r` / `c` / `m` / `a` | Review: shot state **re-roll** / **re-circulate** / **comp** / **final**. The same key again clears it. Or click the row across the top (shown while paused) |
-| `x` | Review: clear the shot's choice |
+| `r` / `c` / `m` / `a` | Review: shot state **re-roll** / **re-circulate** / **comp** / **final**. The same key again clears it. Or click the row across the top (shown while paused). Setting a state opens the note box |
+| `n` | Review: edit the shot's note (one line; Enter keeps it, Esc leaves it as it was) |
+| `x` | Review: clear the shot's choice, note included |
 | `Ctrl+Shift+S` (`Cmd+S`) | Review: save the choices file, then run the project's scripts |
 | `Ctrl+S` | XML in rung folders: on a shot's first / last frame, save `NN_start.png` / `NN_end.png`. Any other frame: numbered snapshot |
 | `r` / `u` | Plain XML (no rung folders): reject the clip on screen / restore it |
@@ -188,6 +189,8 @@ Each press swaps that version into the slot, on the same frame (pressed during p
 | comp | `m` | **Mark for comp**: make a candidate from it |
 | ★ final | `a` | **Mark as final**: the star fills yellow |
 
+Setting a state opens a one-line box, **Notes for NN**, filled with the shot's current note: type what the room said and press `Enter`, or `Esc` to leave the note as it was. `n` opens the same box without changing the state. The note shows under the row and is saved in the shot's `note`.
+
 The project's scripts act on these on save and print the next step for each marked shot (`to reroll: …`); the save card always shows those lines.
 
 A shot can also have a chosen version with no state. `x` clears a shot's choice altogether: its entry leaves the file on save and the project's own rule decides what plays.
@@ -210,7 +213,7 @@ If a script is missing or fails, the card says so, word for word, and the choice
 }
 ```
 
-`file` is relative to the XML's folder and always names an original, never a copy. `mark` is the shot state: `reroll`, `recirculate`, `comp`, `final` or `null` (a `candidate` from an older save is kept as it is). Only shots with a choice are listed, and a `note` already in the file is kept.
+`file` is relative to the XML's folder and always names an original, never a copy. `mark` is the shot state: `reroll`, `recirculate`, `comp`, `final` or `null` (a `candidate` from an older save is kept as it is). Only shots with a choice or a note are listed. `note` is the shot's one-line note from the box; a note nobody edited this session is kept as it was.
 
 **Opening.** The review XML is the one named by `review_xml` (default `review.xml`). Before it loads, mpv runs the project's build script so the XML matches the folders and the saved choices; every shot starts on its chosen version, with its state lit. If the script can't run, mpv says why and plays the XML as it is.
 
