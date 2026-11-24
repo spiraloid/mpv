@@ -1278,18 +1278,35 @@ end)
 
 -- ── jumping ───────────────────────────────────────────────────────────────────
 
-local function frame_slack()
+local slack = {}   -- one table: the script's main chunk is near Lua's limit of 200 locals
+function slack.frame()
     local fps = state.fps or mp.get_property_number("container-fps") or 30
     return 0.5 / fps
 end
 
+-- How far before a shot's start a time still counts as that shot. A scanned
+-- video's cut times can sit a little after the frame they belong to: half a
+-- frame. In an assembly each shot's first frame lands exactly on (a hair after)
+-- its start, and a take at another frame rate (a 24 fps take in a 23.976 cut)
+-- can put the previous shot's last frame inside that half frame: 1 ms, so that
+-- frame stays the previous shot's.
+function slack.shot()
+    return state.assembly and 0.001 or slack.frame()
+end
+
+-- where a jump to shot s lands: an assembly just inside the shot (so only its
+-- own frames are in play), a scanned video half a frame before the cut
+function slack.target(s)
+    if state.assembly then return s.t + 0.0005 end
+    return math.max(0, s.t - slack.frame())
+end
+
 local function jump_to(i)
     local s = state.shots[i]
-    local h = frame_slack()
     -- an assembly stops on the shot, so Up / Down and the marks act on the shot
     -- on screen instead of wherever playback has rolled on to
     if state.assembly then mp.set_property_bool("pause", true) end
-    mp.commandv("seek", tostring(math.max(0, s.t - h)), "absolute+exact")
+    mp.commandv("seek", tostring(slack.target(s)), "absolute+exact")
     if state.assembly then
         osd(string.format("%d/%d  %s", i, #state.shots, s.name or ""), 1)
     end
@@ -1302,7 +1319,7 @@ local function shot_next()
     local shots = state.shots
     if not shots then mp.command("frame-step"); return end
     local pos = mp.get_property_number("time-pos") or 0
-    local h = frame_slack()
+    local h = slack.shot()
     for i, s in ipairs(shots) do
         if usable(i) and s.t > pos + h then jump_to(i); return end
     end
@@ -1314,7 +1331,7 @@ local function shot_prev()
     local shots = state.shots
     if not shots then mp.command("frame-back-step"); return end
     local pos = mp.get_property_number("time-pos") or 0
-    local h = frame_slack()
+    local h = slack.shot()
     local cur = 0
     for i, s in ipairs(shots) do if s.t <= pos + h then cur = i end end
     if usable(cur) and pos - shots[cur].t > 0.5 then jump_to(cur); return end
@@ -1356,7 +1373,7 @@ local function ass_text(s) return (s:gsub("\\", "\\\\"):gsub("{", "\\{"):gsub("}
 local function current_shot_index()
     local pos = mp.get_property_number("time-pos")
     if not pos or not state.shots then return nil end
-    local h = frame_slack()
+    local h = slack.shot()
     local cur
     for i, s in ipairs(state.shots) do if s.t <= pos + h then cur = i end end
     return cur
@@ -2186,7 +2203,7 @@ local function version_step(dir)
     local pos
     if not mp.get_property_bool("pause") then
         mp.set_property_bool("pause", true)
-        pos = math.max(0, shot.t - frame_slack())
+        pos = shot.t + 0.0005   -- just inside the shot, as a jump lands
     end
     choose_version(asm, shot, f.path,
                    string.format("%s  ·  %d / %d", rung_label(rung_info(f.path), shot.num_text), k, #list), pos)
