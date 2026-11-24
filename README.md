@@ -83,33 +83,46 @@ The playlist auto-filters to the same media type as the starting file (video / i
 
 ## Shortcuts
 
-### Playback & Navigation
+Press `h` in mpv for the same list on screen.
+
+### Playback & files
 
 | Key | Action |
 |-----|--------|
-| `SPACE` | Next image · toggle pause (video/audio) |
-| `UP` / `DOWN` | Previous / next playlist item (XML assembly: the shot's history, `UP` older, `DOWN` newer) |
+| `SPACE` | Images: next image · video / audio: pause / play |
+| `UP` / `DOWN` | Previous / next file in the playlist (in an XML: the shot's history, see below) |
+| `PGUP` / `PGDWN` | Previous / next file in the playlist |
+| `WHEEL_UP` / `WHEEL_DOWN` | Video: pause and step a frame · images / audio: previous / next file · XML: previous / next shot |
+| `Alt+WHEEL_UP` / `Alt+WHEEL_DOWN` | Previous / next file of the same media type only |
 | `Shift+LEFT` / `Shift+RIGHT` | Seek −5 s / +5 s |
-| `WHEEL_UP` / `WHEEL_DOWN` | Frame back/forward (video) · prev/next item (image/audio) · prev/next shot (XML assembly) |
-| `Alt+WHEEL_UP` / `Alt+WHEEL_DOWN` | Prev / next item of same media type only |
-| `PGUP` / `PGDWN` | Previous / next playlist item |
+| `,` / `.` | Frame back / forward (mpv defaults) |
+| `s` (`Alt+s`) | Select: copy the file without its `_attempt_##` suffix |
+| `\` | Variant mode: show / hide `_attempt_##` files |
+| `Ctrl+LEFT` / `Ctrl+RIGHT` | Shift a media group backward / forward |
+| `DEL` / `F2` | Move the file to the trash / rename it |
+| `Ctrl+S` | Numbered snapshot (in an XML, see below) |
+| `Ctrl+C` | Copy the frame to the clipboard |
+| `Ctrl+R` | Rebuild the playlist |
+| `Ctrl+N` | Jump to the next sibling folder |
+| `ENTER` / `F` / `Alt+ENTER` | Fullscreen |
+| Middle click | Fullscreen ↔ quarter-size window |
+| `Esc` / `Q` | Quit (asks first if an XML has unsaved changes) |
 
-### Shot Review Keys
+### Shots and review
 
 | Key | Action |
 |-----|--------|
-| `LEFT` / `RIGHT` | Previous / next shot, landing on its first frame (paused, in an XML assembly). Frame step when the file has no known cuts |
-| `WHEEL_UP` / `WHEEL_DOWN` | Previous / next shot, one per notch (XML assembly) |
-| `UP` / `DOWN` | Step through the history of the shot on screen: `UP` older (to the cleaned plate), `DOWN` newer (to the final) |
-| `r` / `c` / `m` / `a` | Review: shot state re-roll / re-circulate / comp / final. Press the set one again to clear it |
+| `LEFT` / `RIGHT` | Previous / next shot, on its first frame. An XML pauses there. Frame step when the file has no known cuts |
+| `WHEEL_UP` / `WHEEL_DOWN` | Previous / next shot, one per notch (XML) |
+| `UP` / `DOWN` | XML in rung folders: the shot's history. `UP` older (to the cleaned plate), `DOWN` newer (to the final). Pauses on the shot if it was playing |
+| `o` | Show / hide the shot label and buttons (outside an XML: mpv's progress bar) |
+| `r` / `c` / `m` / `a` | Review: shot state **re-roll** / **re-circulate** / **comp** / **final**. The same key again clears it. Or click the row across the top (shown while paused) |
 | `x` | Review: clear the shot's choice |
-| `Ctrl+Shift+S` (`Cmd+S`) | Review: save the choices and update the folders |
-| `Ctrl+S` | On a shot's first / last frame: save `NN_start.png` / `NN_end.png`. Any other frame: numbered snapshot |
+| `Ctrl+Shift+S` (`Cmd+S`) | Review: save the choices file, then run the project's scripts |
+| `Ctrl+S` | XML in rung folders: on a shot's first / last frame, save `NN_start.png` / `NN_end.png`. Any other frame: numbered snapshot |
 | `r` / `u` | Plain XML (no rung folders): reject the clip on screen / restore it |
-| `o` | Show / hide the shot label and buttons (outside an XML assembly: mpv's progress bar) |
-| `,` / `.` | Frame back / forward (mpv defaults) |
 
-The review keys work only while a review XML is open (see [Shot review](#shot-review) below); `m` is mute everywhere else.
+The review keys work only while the review XML is open (see [Shot review](#shot-review) below); elsewhere `r` / `c` / `m` / `a` / `x` keep their usual jobs (`m` is mute).
 
 ## Shot review
 

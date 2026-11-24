@@ -579,37 +579,82 @@ end
 
 -- ── help ──────────────────────────────────────────────────────────────────────
 
+-- One row per key: {keys, what it does}; a row with only a title starts a section.
+local HELP = {
+    {"PLAYBACK & FILES"},
+    {"Space", "Images: next image  |  Video / audio: pause, play"},
+    {"Up / Down", "Previous / next file   (XML: the shot's history, below)"},
+    {"Wheel", "Video: pause + frame step  |  Images / audio: previous / next file"},
+    {"Alt + Wheel", "Previous / next file of the same media type"},
+    {"s", "Select: copy the file without its _attempt_## suffix"},
+    {"\\", "Variant mode: show / hide _attempt_ files"},
+    {"Ctrl + Left / Right", "Shift a media group backward / forward"},
+    {"Del  /  F2", "Move to the trash  /  rename"},
+    {"Ctrl + s", "Numbered snapshot   (XML: below)"},
+    {"Ctrl + c", "Copy the frame to the clipboard"},
+    {"Ctrl + r  /  Ctrl + n", "Rebuild the playlist  /  next sibling folder"},
+    {"Enter  /  Middle click", "Fullscreen  /  quarter-size window"},
+    {"Esc  /  q", "Quit   (asks first if an XML has unsaved changes)"},
+    {"SHOTS   an XML, or a video with known cuts"},
+    {"Left / Right", "Previous / next shot, on its first frame   (an XML pauses there)"},
+    {"Wheel", "XML: previous / next shot"},
+    {"o", "Show / hide the shot label and buttons"},
+    {"REVIEW   the review XML; pause to see the state row"},
+    {"Up / Down", "The shot's history: Up older (to the plate), Down newer (to the final)"},
+    {"r / c / m / a", "Shot state: re-roll / re-circulate / comp / final   (again: clear)"},
+    {"x", "Clear the shot's choice"},
+    {"Ctrl + Shift + s", "Save: the choices file, then the project's scripts"},
+    {"Ctrl + s", "On a shot's first / last frame: NN_start.png / NN_end.png"},
+    {"PLAIN XML   no rung folders"},
+    {"r / u", "Reject / restore the clip on screen"},
+}
+local HELP_NOTE = "The playlist holds only the starting file's media type.  " ..
+                  "Variant mode starts ON if you open an _attempt_ file."
+
+-- Drawn as two columns on its own overlay (the OSD font isn't monospaced, so
+-- padding with spaces never lines up). h again, or 15 s, hides it.
+local help_overlay = mp.create_osd_overlay("ass-events")
+help_overlay.z = 1000   -- over the shot label and buttons
+local help_timer
+-- braces would start an ASS tag; a backslash gets a zero-width space after it so it never starts one
+local function help_escape(s) return (s:gsub("\\", "\\\226\128\139"):gsub("{", "\\{"):gsub("}", "\\}")) end
+
+local function hide_help()
+    help_overlay:remove(); help_visible = false
+    if help_timer then help_timer:kill(); help_timer = nil end
+end
+
 function show_custom_help()
-    if help_visible then
-        mp.osd_message("", 0); help_visible = false; return
+    if help_visible then hide_help(); return end
+    local W, H = 1280, 720
+    help_overlay.res_x, help_overlay.res_y = W, H
+    local x0, x1, y, fs, lh = 36, 250, 52, 15, 18.5
+    local style = "{\\an7\\pos(%.1f,%.1f)\\fs%.1f\\bord0.6\\shad0\\3c&H000000&\\3a&H60&\\1c&H%s&\\1a&H00&%s}%s"
+    local ev = {}
+    -- a dark panel behind it, so it reads on any picture
+    local rows, titles = 0, 0
+    for _, r in ipairs(HELP) do if r[2] then rows = rows + 1 else titles = titles + 1 end end
+    local h = 14 + fs * 1.4 + titles * (lh + 8) + rows * lh + lh * 1.6
+    ev[#ev + 1] = string.format("{\\an7\\pos(0,0)\\p1\\bord0\\shad0\\1c&H000000&\\1a&H38&}m %d %d l %d %d l %d %d l %d %d{\\p0}",
+        x0 - 16, y - 12, x0 + 760, y - 12, x0 + 760, y - 12 + h, x0 - 16, y - 12 + h)
+    ev[#ev + 1] = string.format(style, x0, y, fs * 1.25, "FFFFFF", "\\b1", "Hotkeys")
+    ev[#ev + 1] = string.format(style, x0 + 110, y + 4, fs * 0.9, "A0A0A0", "", "h hides this")
+    y = y + fs * 1.4 + 6
+    for _, r in ipairs(HELP) do
+        if not r[2] then
+            y = y + 8
+            ev[#ev + 1] = string.format(style, x0, y, fs * 0.9, "80C8FF", "\\b1", help_escape(r[1]))
+        else
+            ev[#ev + 1] = string.format(style, x0 + 8, y, fs, "FFFFFF", "\\b1", help_escape(r[1]))
+            ev[#ev + 1] = string.format(style, x1, y, fs, "E0E0E0", "", help_escape(r[2]))
+        end
+        y = y + lh
     end
-    mp.osd_message([[Custom Hotkeys:
-
-s              - Select: copy file without '_attempt_##' suffix
-ctrl+s         - Take numbered snapshot  |  XML: a shot's first / last frame saves NN_start / NN_end.png
-ctrl+c         - Copy current frame to clipboard
-ctrl+r         - Manually rebuild playlist
-\              - Toggle variant mode
-DEL            - Move current file to trash
-F2             - Rename current file
-h              - Show/hide this help
-Middle click   - Fullscreen <-> quarter-screen window
-Space          - Images: next image  |  Video/Audio: pause/play
-Left/Right     - Prev/next shot (frame step when no cuts known)
-r / c / m / a  - Review: shot state re-roll / re-circulate / comp / final
-x              - Review: clear the shot's choice    ctrl+shift+s - Review: save
-r / u          - Plain XML (no rung folders): reject / restore a clip
-o              - Show/hide shot label + buttons (XML assembly)
-Up/Down        - Navigate playlist  |  XML: the shot's history, Up older (to the plate), Down newer (to the final)
-Enter          - Toggle fullscreen
-ctrl+Left/Right- Shift media group backward/forward
-Wheel          - Videos: pause + frame step  |  Images/Audio: navigate  |  XML: shots
-Alt+Wheel      - Navigate same media type only
-
-Playlist holds only the starting file's media type (image/video/audio).
-Variant mode starts ON if you open an _attempt_ file, OFF otherwise.]], 10)
+    ev[#ev + 1] = string.format(style, x0, y + 8, fs * 0.85, "A0A0A0", "", help_escape(HELP_NOTE))
+    help_overlay.data = table.concat(ev, "\n")
+    help_overlay:update()
     help_visible = true
-    mp.add_timeout(10, function() help_visible = false end)
+    help_timer = mp.add_timeout(15, hide_help)
 end
 
 function toggle_variant_mode()
