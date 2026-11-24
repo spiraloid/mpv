@@ -1822,7 +1822,7 @@ local function hide_osc(on)
     mp.commandv("script-message", "osc-visibility", on and "never" or "auto", "no_osd")
     if on and click_bound then          -- re-push our click above the controller's
         click_bound = false
-        mp.add_timeout(0.05, function() if hovered then set_click_binding(true) end end)
+        mp.add_timeout(0.05, function() if hovered and not export.prompting then set_click_binding(true) end end)
     end
 end
 
@@ -2318,7 +2318,7 @@ local function draw_modal()
     modal.check_rect = nil
     if spec.check then   -- one checkbox above the buttons: click it or press its key
         local c, box, fs = spec.check, 30 * k, 28 * k
-        local label_w = #c.label * fs * 0.5
+        local label_w = #c.label * fs * 0.44
         local x0 = w / 2 - (box + 14 * k + label_w) / 2
         local y0 = y + 22 * k
         ev[#ev + 1] = string.format(
@@ -2332,7 +2332,7 @@ local function draw_modal()
         end
         ev[#ev + 1] = string.format("{\\an4\\pos(%.1f,%.1f)\\bord0\\shad0\\q2\\1c&HFFFFFF&\\1a&H00&\\fs%.1f}%s",
             x0 + box + 14 * k, y0 + box / 2, fs, ass_text(c.label))
-        modal.check_rect = {x0 - 10 * k, y0 - 10 * k, x0 + box + 14 * k + label_w + 10 * k, y0 + box + 10 * k}
+        modal.check_rect = {x0 - 6 * k, y0 - 6 * k, x0 + box + 14 * k + label_w + 6 * k, y0 + box + 6 * k}
         y = y + box + 34 * k
     end
     local n = #spec.choices
@@ -2360,6 +2360,27 @@ local function draw_modal()
     modal_overlay:update()
 end
 
+-- Every click on a prompt goes to <temp>/mpv-prompt-clicks.log (the last 40):
+-- where the pointer was, what it hit, and where the buttons were drawn. When a
+-- click seems to miss, that file says why.
+function modal.log_click(m, hit)
+    local path = utils.join_path(temp_dir(), "mpv-prompt-clicks.log")
+    local old = {}
+    for line in (read_file(path) or ""):gmatch("[^\n]+") do old[#old + 1] = line end
+    while #old >= 40 do table.remove(old, 1) end
+    local d = mp.get_property_native("osd-dimensions") or {}
+    local rects = {}
+    for i, r in ipairs(modal.rects or {}) do rects[#rects + 1] = string.format("%d:%.0f,%.0f-%.0f,%.0f", i, r[1], r[2], r[3], r[4]) end
+    local c = modal.check_rect
+    old[#old + 1] = string.format("%s  pointer %s,%s  hit %s  osd %sx%s  buttons %s  checkbox %s",
+        os.date("%H:%M:%S"), tostring(m and m.x), tostring(m and m.y), hit, tostring(d.w), tostring(d.h),
+        table.concat(rects, " "), c and string.format("%.0f,%.0f-%.0f,%.0f", c[1], c[2], c[3], c[4]) or "none")
+    write_file(path, table.concat(old, "\n") .. "\n")
+end
+
+-- a prompt's buttons follow the window when it changes size
+mp.observe_property("osd-dimensions", "native", function() if modal.spec then draw_modal() end end)
+
 local function close_modal()
     drag.hold("prompt", false)
     modal.spec = nil
@@ -2372,6 +2393,10 @@ end
 
 local function open_modal(spec)
     drag.hold("prompt", true)
+    -- the state row's click binding must not sit under the prompt's: two bindings
+    -- on the same button and mpv picks either one
+    hovered = nil
+    set_click_binding(false)
     modal.spec = spec
     modal.sel = spec.default or 1
     export.prompting = true
@@ -2407,9 +2432,11 @@ local function open_modal(spec)
     local function click()
         local m = mp.get_property_native("mouse-pos")
         local c = modal.check_rect
-        if c and m and m.x >= c[1] and m.x <= c[3] and m.y >= c[2] and m.y <= c[4] then return toggle() end
         local i = over(m)
-        if i then close_modal(); spec.done(i) end
+        local on_check = not i and c and m and m.x >= c[1] and m.x <= c[3] and m.y >= c[2] and m.y <= c[4]
+        modal.log_click(m, i and spec.choices[i].label or (on_check and "checkbox") or "nothing")
+        if i then close_modal(); spec.done(i)
+        elseif on_check then toggle() end
     end
     modal_hover = function(m)
         local i = modal.spec == spec and over(m)
