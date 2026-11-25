@@ -202,6 +202,9 @@ Setting a state opens a box under the row, **Notes for NN**, filled with the sho
 | `Ctrl+LEFT` / `Ctrl+RIGHT` | Move a word (`Alt` works too: macOS can keep `Ctrl`+arrows for switching desktops) |
 | `UP` / `DOWN` | First / last character (also `Home` / `End`); they don't change the version |
 | `Shift` + any of those | Select from the cursor to there |
+| A click | Put the cursor there |
+| A drag | Select from where the button went down |
+| A double click | Select the word |
 | `Ctrl+A` / `Cmd+A`, or a triple click | Select the whole note |
 | `Backspace` / `Delete` | Delete a character, or the selection. `Ctrl+U` empties the box |
 | `Ctrl+C` / `Cmd+C`, `Ctrl+X` / `Cmd+X` | Copy / cut the selection, or the whole note when nothing is selected |

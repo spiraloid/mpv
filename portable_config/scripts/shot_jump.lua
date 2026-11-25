@@ -1644,6 +1644,22 @@ function B.wrap(chars, width, fs)
     lines[#lines + 1] = {a, #chars}
     return lines
 end
+-- the cursor position nearest a point in the open note box (as it was last drawn)
+function B.note_at(px, py)
+    local g = B.note_geo
+    if not g then return nil end
+    local i = math.max(1, math.min(#g.lines, math.floor((py - g.top) / g.lh) + 1))
+    local a, b = g.lines[i][1], g.lines[i][2]
+    if i < #g.lines then b = b - 1 end   -- past a line's last character is the start of the next line
+    local best, bx, s = a - 1, g.sx, ""
+    for j = a, b do
+        s = s .. g.chars[j]
+        local x = g.sx + B.text_w(s, g.fs)
+        if math.abs(x - px) > math.abs(bx - px) then break end
+        best, bx = j, x
+    end
+    return best
+end
 local function row_events(events, list, vx0, vy0, vw, k)
     if list.preview then   -- someone else is editing this review: say so where the row would be
         events[#events + 1] = string.format(
@@ -1760,6 +1776,7 @@ local function row_events(events, list, vx0, vy0, vw, k)
         local lines = B.wrap(bx.chars, x0 + bw - 16 * k - sx, fs)
         local bh = #lines * lh + 2 * pad
         B.note_rect, B.note_lines = {x0, y0, x0 + bw, y0 + bh}, #lines   -- for clicks on the box
+        B.note_geo = {sx = sx, top = y0 + pad, lh = lh, fs = fs, lines = lines, chars = bx.chars}
         local function rect(colour, alpha, xa, ya, xb, yb)
             events[#events + 1] = string.format(
                 "{\\an7\\pos(0,0)\\p1\\bord0\\shad0\\1c&H%s&\\1a&H%s&}m %.1f %.1f l %.1f %.1f %.1f %.1f %.1f %.1f{\\p0}",
@@ -2029,8 +2046,9 @@ local function set_click_binding(on)
     if on == click_bound then return end
     click_bound = on
     if on then
-        mp.add_forced_key_binding("MBTN_LEFT", "shot_button_click", function()
-            if B.box_click then return B.box_click() end   -- the note box is open: it takes the click
+        mp.add_forced_key_binding("MBTN_LEFT", "shot_button_click", function(e)
+            if B.box_click then return B.box_click(e) end   -- the note box is open: it takes the click
+            if e.event ~= "down" and e.event ~= "press" then return end
             local p, h = drag.pointer(), nil   -- where the pointer really is now
             for _, bt in ipairs(buttons) do
                 if bt.enabled and p and p.x >= bt.x0 and p.x <= bt.x1 and p.y >= bt.y0 and p.y <= bt.y1 then h = bt.name end
@@ -2038,7 +2056,7 @@ local function set_click_binding(on)
             if h == "restore" then restore()
             elseif h == "reject" then retire()
             elseif h and review_click then review_click(h) end
-        end)
+        end, {complex = true})
         -- keep a quick second click from toggling fullscreen
         mp.add_forced_key_binding("MBTN_LEFT_DBL", "shot_button_dbl", function() end)
     else
@@ -2089,7 +2107,10 @@ update_hover = function(m)
     if h ~= hovered then hovered = h; render() end
 end
 
-mp.observe_property("mouse-pos", "native", function(_, m) update_hover(m) end)
+mp.observe_property("mouse-pos", "native", function(_, m)
+    if B.box_move then B.box_move(m) end   -- a drag in the note box
+    update_hover(m)
+end)
 
 -- ── o: toggle the overlay ─────────────────────────────────────────────────────
 
@@ -3148,7 +3169,8 @@ function notes.close(keep)
     local b = notes.box
     if not b then return end
     notes.box = nil
-    B.note_rect, B.box_click, B.note_lines = nil, nil, nil
+    B.note_rect, B.box_click, B.note_lines, B.note_geo, B.box_move = nil, nil, nil, nil, nil
+    drag.hold("note", false)
     notes.report()
     for _, name in ipairs(notes.keys) do mp.remove_key_binding(name) end
     notes.keys = {}
@@ -3267,10 +3289,32 @@ function notes.edit(shot, prefill, on_keep)
     for _, k in ipairs({"Ctrl+v", "Meta+v"}) do
         key(k, function() insert((mp.get_property("clipboard/text") or ""):gsub("[\r\n]+", " ")) end)
     end
-    -- three clicks on the box select the whole note; a click elsewhere still
-    -- works the state row
+    -- the mouse in the box, like any text field: a click puts the cursor there, a
+    -- drag selects from there, two clicks select the word, three the whole note.
+    -- A click elsewhere still works the state row
     b.clicks = {}
-    local function click()
+    local function word_at(p)   -- the word (or run of spaces) at a cursor position
+        local n = #b.chars
+        if n == 0 then return 0, 0 end
+        local i = (b.chars[p + 1] and b.chars[p + 1] ~= " ") and p + 1 or math.max(1, p)
+        local space = b.chars[i] == " "
+        local lo, hi = i, i
+        while lo > 1 and (b.chars[lo - 1] == " ") == space do lo = lo - 1 end
+        while hi < n and (b.chars[hi + 1] == " ") == space do hi = hi + 1 end
+        return lo - 1, hi
+    end
+    local function click(e)
+        local ev = e and e.event or "down"
+        if ev == "up" then   -- the end of a drag: nothing dragged over is no selection
+            if b.dragging then
+                b.dragging = false
+                if b.anchor == b.pos then b.anchor = nil end
+                render(true)
+                notes.report()
+            end
+            return
+        end
+        if ev ~= "down" and ev ~= "press" then return end
         local now = mp.get_time()
         local p, r = drag.pointer(), B.note_rect
         local inside = p and r and p.x >= r[1] and p.x <= r[3] and p.y >= r[2] and p.y <= r[4]
@@ -3284,16 +3328,29 @@ function notes.edit(shot, prefill, on_keep)
             end
             return
         end
+        if #b.clicks > 0 and now - b.clicks[#b.clicks] > 0.5 then b.clicks = {} end
         b.clicks[#b.clicks + 1] = now
-        while #b.clicks > 3 do table.remove(b.clicks, 1) end
-        if #b.clicks == 3 and now - b.clicks[1] < 1.0 then all(); b.clicks = {} end
+        local at = B.note_at(p.x, p.y) or b.pos
+        b.dragging = false
+        if #b.clicks >= 3 then all(); b.clicks = {}
+        elseif #b.clicks == 2 then b.anchor, b.pos = word_at(at)
+        else b.pos, b.dragging = at, ev == "down"; b.anchor = b.dragging and at or nil end   -- held: moving selects from here
         render(true)
         notes.report()
     end
+    B.box_move = function(m)
+        if notes.box ~= b or not b.dragging or not m then return end
+        local at = B.note_at(m.x, m.y)
+        if at and at ~= b.pos then b.pos = at; render(true); notes.report() end
+    end
+    drag.hold("note", true)   -- a drag in the box selects; it doesn't move the window
     -- the state row's click binding can be re-pushed above this one (when the
     -- controller hides), so it hands clicks to the box while the box is open
     B.box_click = click
-    key("MBTN_LEFT", click)
+    mp.add_forced_key_binding("MBTN_LEFT", "shot_note_MBTN_LEFT", function(e)
+        if notes.box == b then click(e) end
+    end, {complex = true})
+    notes.keys[#notes.keys + 1] = "shot_note_MBTN_LEFT"
     key("MBTN_LEFT_DBL", function() end)   -- not fullscreen
     for _, k in ipairs({"WHEEL_UP", "WHEEL_DOWN", "TAB"}) do key(k, function() end) end
     key("ENTER", function() notes.close(true) end)
@@ -3307,7 +3364,8 @@ end
 function notes.report()
     local b = notes.box
     mp.set_property_native("user-data/shot_jump/note_box", b and
-        {text = table.concat(b.chars), pos = b.pos, anchor = b.anchor or -1, lines = B.note_lines or 1} or false)
+        {text = table.concat(b.chars), pos = b.pos, anchor = b.anchor or -1, lines = B.note_lines or 1,
+         dragging = b.dragging or false} or false)
 end
 
 -- Imported notes ---------------------------------------------------------------
