@@ -602,7 +602,7 @@ local HELP = {
     {"REVIEW   the review XML; pause to see the state row"},
     {"Up / Down", "The shot's history: Up older (to the plate), Down newer (to the final)"},
     {"r / c / a   ·   m", "Shot state: re-roll / re-circulate / final  (again: clear)   ·   comp on / off"},
-    {"n", "Edit the shot's note   (setting a state opens it too)"},
+    {"n", "Edit the shot's note   (re-roll and re-circulate open it too)"},
     {"in the note box", "Click, drag, double click: cursor, select, word  ·  Shift / Ctrl + arrows"},
     {"i  /  Tab", "Import notes from a recorded review  /  step through them (Enter accepts)"},
     {"x", "Clear the shot's choice, note included"},

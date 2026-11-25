@@ -119,7 +119,7 @@ Press `h` in mpv for the same list on screen.
 | `WHEEL_UP` / `WHEEL_DOWN` | Previous / next shot, one per notch (XML) |
 | `UP` / `DOWN` | XML in rung folders: the shot's history. `UP` older (to the cleaned plate), `DOWN` newer (to the final). Pauses on the shot if it was playing |
 | `o` | Show / hide the shot label and buttons (outside an XML: mpv's progress bar) |
-| `r` / `c` / `a` | Review: shot state **re-roll** / **re-circulate** / **final**. The same key again clears it. Or click the row across the top (shown while paused). Setting a state opens the note box |
+| `r` / `c` / `a` | Review: shot state **re-roll** / **re-circulate** / **final**. The same key again clears it. Or click the row across the top (shown while paused). Setting re-roll or re-circulate opens the note box |
 | `m` | Review: the **comp** switch, on or off beside the state |
 | `i` | Review: import the next notes file from a recorded review |
 | `Tab` / `Shift+Tab` | Review: step to the next / previous imported note (`Enter` accepts, `x` skips, `Esc` stops) |
@@ -205,7 +205,7 @@ Each press swaps that version into the slot, on the same frame (pressed during p
 
 `x` clears the state and the switch, and so does stepping the shot to another version. Switching comp on with no state opens the note box.
 
-Setting a state opens a box under the row, **Notes for NN**, filled with the shot's current note: type what the room said and press `Enter`, or `Esc` to leave the note as it was. Long text wraps, and the box grows a line at a time. `n` opens the same box without changing the state. While it's open every key types or edits:
+Setting re-roll or re-circulate opens a box under the row (a final has no notes: the star doesn't open the box, and it clears the note the shot had), **Notes for NN**, filled with the shot's current note: type what the room said and press `Enter`, or `Esc` to leave the note as it was. Long text wraps, and the box grows a line at a time. `n` opens the same box without changing the state. While it's open every key types or edits:
 
 | Key | In the note box |
 |---|---|

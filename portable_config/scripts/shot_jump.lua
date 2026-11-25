@@ -3235,6 +3235,13 @@ function notes.close(keep)
     render(true)
 end
 
+-- The box shows only while paused. Playback starting again (the controller's play
+-- button, say) would leave it open and unseen, still taking every key: Escape
+-- would close a box nobody can see instead of quitting. So it closes, text kept.
+mp.observe_property("pause", "bool", function(_, paused)
+    if paused == false and notes.box then notes.close(true) end
+end)
+
 function notes.edit(shot, prefill, on_keep)
     local r = current_review()
     if not r or review_busy or export.prompting or not shot or not shot.num or in_preview(r) then return end
@@ -3838,14 +3845,18 @@ local function set_mark(name)
     if notes.step_mark(name) then return end   -- stepping an imported note: its state
     local file = slash(shot.file or shot.play)
     local cur, comp = mark_of(r, shot), notes.comp_of(r, shot)
-    local ask   -- open the note box: a state was set, or comp went on with no state
+    local ask   -- open the note box: a state was set (not final: a final has no notes), or comp went on with no state
     if name == "comp" then   -- the switch: flips, and leaves the state alone
         if cur == "final" then osd("a final isn't comped", 1.5); return end
         comp = not comp
         ask = comp and not cur
     else                     -- a state: the same key again clears it; comp stays as it is
         cur = cur ~= name and name or false
-        ask = cur
+        ask = cur and cur ~= "final"
+        if cur == "final" then   -- approved: what was asked of it is done with, and an open box goes too
+            if notes.box then notes.close(false) end
+            r.notes[shot.num] = ""
+        end
     end
     r.marks[shot.num] = {file = file, mark = cur or false, comp = comp}
     notes.touch(r, shot.num)
