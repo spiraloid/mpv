@@ -39,6 +39,11 @@ local o = {
     export_audio_clip = "",  -- id of an audio clip whose file is the rendered video's sound
     review_notes_dir = "",   -- under the XML's folder: notes files from recorded reviews (i imports)
     real_pointer = true,     -- Mac: a click asks macOS where the pointer is (no: trust mpv; for tests)
+    -- Look only, for people who watch: a review always opens as a preview (no
+    -- rebuild, no lock, no states, notes or Save), and no XML or video is written
+    -- (no reject / restore, no clip.xml beside a scanned video, no render).
+    -- A launch sets it: --script-opts-append=shot_jump-preview=yes
+    preview = false,
 }
 options.read_options(o, "shot_jump")
 
@@ -1180,7 +1185,7 @@ local function start_scan(path)
                 set_shots_from_cuts(s.cuts)
                 if #s.cuts > 0 then osd((#s.cuts + 1) .. " shots", 1) end
             end
-            if #s.cuts > 0 and o.write_xml and not exists(sidecar_path(path)) then
+            if #s.cuts > 0 and o.write_xml and not o.preview and not exists(sidecar_path(path)) then
                 write_sidecar(path, s.cuts, info)
             end
         end)
@@ -1964,6 +1969,7 @@ end
 local function retire()
     local asm = state.assembly
     if not asm then osd("r rejects a clip while playing an XML assembly", 2); return end
+    if o.preview then osd("preview: nothing is moved or saved", 2); return end
     if asm.generated then osd("this XML only marks shots of one video; nothing to reject", 2); return end
     local pos = mp.get_property_number("time-pos") or 0
     local shot = current_shot()
@@ -2001,6 +2007,7 @@ end
 local function restore()
     local asm = state.assembly
     if not asm then return end
+    if o.preview then osd("preview: nothing is moved or saved", 2); return end
     local pos = mp.get_property_number("time-pos") or 0
     local shot = current_shot()
     if not shot then return end
@@ -2496,6 +2503,7 @@ local function draw_saving(name, secs, hint)
 end
 
 local function run_export(done)
+    if o.preview then return done() end   -- a look-only launch renders nothing
     local xml = export.xml
     local tmp = export_tmp(export_target(xml))
     os.remove(tmp)
@@ -3068,6 +3076,7 @@ do
 
     -- "Bay on Studio Mac has this review open (since 14:02)"
     function lock.who(j)
+        if j.view_only then return "view only" end
         return string.format("%s on %s has this review open%s", tostring(j.user or "someone"),
             tostring(j.host or "another computer"),
             type(j.opened) == "number" and (" (since " .. os.date("%H:%M", j.opened) .. ")") or "")
@@ -3076,7 +3085,7 @@ do
     local held, timer
     local function beat()
         for xml, r in pairs(reviews) do   -- a preview: say so once the other editor has gone
-            if r.preview and not r.preview_freed and not lock.other(xml) then
+            if r.preview and not r.preview.view_only and not r.preview_freed and not lock.other(xml) then
                 r.preview_freed = true
                 osd(tostring(r.preview.user or "The other editor") .. " closed " .. name_of(xml) ..
                     ".  Quit and open it again to make changes.", 8)
@@ -4124,6 +4133,11 @@ review_open = function(xml_path)
     if reviews[xml_path] then return end
     local r = {xml = xml_path, root = dir_of(xml_path), marks = {}, touched = {}, cleared = {}, notes = {}}
     reviews[xml_path] = r
+    if o.preview then   -- a look-only launch: the files stay as they are, and nobody is locked out
+        r.preview = {view_only = true}
+        osd("Preview: view only.\nYou can look and step through versions; nothing can be saved.", 8)
+        return
+    end
     local other = lock.other(xml_path)
     if other then
         -- someone else is editing: look only, and leave their files alone (no rebuild)
@@ -4196,6 +4210,10 @@ local function session_changed()
 end
 
 -- single_instance.lua asks before opening a handed-over file over this one
+-- single_instance.lua: a look-only launch handed its file to this mpv, so this
+-- one looks only from now on (reviews opened from here on)
+mp.register_script_message("preview-on", function() o.preview = true end)
+
 mp.register_script_message("unsaved-query", function(from)
     local r = current_review()
     local unsaved = (r and not encoding and not r.preview and #review_changes(r) > 0) or (not r and session_changed())

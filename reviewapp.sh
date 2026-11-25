@@ -1,5 +1,5 @@
 #!/bin/bash
-# Usage: ./reviewapp.sh <path/to/review.xml> ["App Name"]
+# Usage: ./reviewapp.sh [--preview] <path/to/review.xml> ["App Name"]
 #
 # Makes a one-click app that opens that review XML in this folder's mpv.app
 # (portable_config and its scripts included). Drag it onto the Dock.
@@ -7,10 +7,15 @@
 # - Lands in ~/Applications (DEST=<folder> puts it somewhere else)
 # - Default name: "<the XML's folder> Review"
 # - The paths are written into the app, so each Mac makes its own
+# - --preview: the app opens it look only (step through versions; no states,
+#   notes or Save, and no XML or video written). Run it again without
+#   --preview to undo; running it again replaces the app either way
 
 set -euo pipefail
 
-[[ $# -lt 1 ]] && { echo "Usage: ./reviewapp.sh <path/to/review.xml> [\"App Name\"]"; exit 1; }
+PREVIEW=no
+[[ "${1:-}" == "--preview" ]] && { PREVIEW=yes; shift; }
+[[ $# -lt 1 ]] && { echo "Usage: ./reviewapp.sh [--preview] <path/to/review.xml> [\"App Name\"]"; exit 1; }
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MPV="$DIR/mpv.app"
@@ -36,6 +41,11 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
     printf 'XML=%q\n' "$XML"
     printf 'MPV=%q\n' "$MPV"
     printf 'NAME=%q\n' "$NAME"
+    if [[ $PREVIEW == yes ]]; then
+        echo 'OPTS=(--script-opts-append=shot_jump-preview=yes)   # look only'
+    else
+        echo 'OPTS=()'
+    fi
     cat <<'LAUNCHER'
 alert() { osascript -e 'on run argv' -e 'display alert (item 1 of argv) message (item 2 of argv)' -e 'end run' "$NAME" "$1" >/dev/null; }
 if [[ ! -f "$XML" ]]; then
@@ -46,7 +56,7 @@ if [[ ! -d "$MPV" ]]; then
     alert "mpv.app not found where it was. Run reviewapp.sh again."
     exit 1
 fi
-exec open -n -a "$MPV" --args "$XML"
+exec open -n -a "$MPV" --args "${OPTS[@]}" "$XML"
 LAUNCHER
 } > "$APP/Contents/MacOS/launch"
 chmod +x "$APP/Contents/MacOS/launch"
@@ -66,5 +76,5 @@ codesign --force --deep --sign - "$APP"
 "$LSREGISTER" -f "$APP"
 
 echo "✓ $APP"
-echo "  Opens: $XML"
+echo "  Opens: $XML$([[ $PREVIEW == yes ]] && echo "  (look only)")"
 echo "  Drag it onto the Dock."

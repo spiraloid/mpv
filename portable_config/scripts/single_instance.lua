@@ -89,6 +89,10 @@ local function hand_over(paths)
     -- other scripts (shot_jump) leave a file alone when this is set
     mp.set_property_native("user-data/single_instance/leaving", true)
     local lines = {"raise"}
+    -- a look-only launch (shot_jump-preview) makes the running mpv look only too
+    local so = mp.get_property_native("options/script-opts") or {}
+    local pv = so["shot_jump-preview"]
+    if pv == "yes" or pv == "true" then lines[#lines + 1] = "preview" end
     for _, p in ipairs(paths) do lines[#lines + 1] = absolute(p) end
     write(REQ_FILE, table.concat(lines, "\n") .. "\n", "ab")
     msg.info("mpv is already running: handed over " .. #paths .. " file(s)")
@@ -145,7 +149,8 @@ local function poll()
     os.remove(REQ_FILE)
     local paths = {}
     for line in s:gmatch("[^\r\n]+") do
-        if line ~= "raise" then paths[#paths + 1] = line end
+        if line == "preview" then mp.commandv("script-message-to", "shot_jump", "preview-on")
+        elseif line ~= "raise" then paths[#paths + 1] = line end
     end
     local cur = mp.get_property("path")
     local other = false

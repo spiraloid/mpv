@@ -1,14 +1,17 @@
 # reviewapp.ps1 — one-click shortcut that opens a review XML in mpv (the Windows twin of reviewapp.sh)
-# Usage: powershell -ExecutionPolicy Bypass -File reviewapp.ps1 "D:\path\to\review.xml" ["App Name"] [-Mpv "C:\path\to\mpv.exe"]
+# Usage: powershell -ExecutionPolicy Bypass -File reviewapp.ps1 "D:\path\to\review.xml" ["App Name"] [-Mpv "C:\path\to\mpv.exe"] [-Preview]
 #
 # Puts the shortcut in the Start menu (right-click it there: Pin to taskbar) and on the Desktop.
 # mpv.exe: -Mpv, else the one beside this script (portable, with portable_config beside it),
 # else the one on PATH (winget). The paths are written into the shortcut, so each PC makes its own.
+# -Preview: the shortcut opens it look only (step through versions; no states, notes or Save,
+# and no XML or video written). Run it again without -Preview to undo; it replaces the shortcut.
 
 param(
     [Parameter(Mandatory = $true, Position = 0)][string]$Xml,
     [Parameter(Position = 1)][string]$Name,
-    [string]$Mpv
+    [string]$Mpv,
+    [switch]$Preview
 )
 $ErrorActionPreference = "Stop"
 
@@ -39,12 +42,12 @@ $places = @([Environment]::GetFolderPath("Programs"), [Environment]::GetFolderPa
 foreach ($dir in $places) {
     $lnk = $shell.CreateShortcut((Join-Path $dir $file))
     $lnk.TargetPath = $Mpv
-    $lnk.Arguments = '"' + $Xml + '"'
+    $lnk.Arguments = $(if ($Preview) { '--script-opts-append=shot_jump-preview=yes ' } else { '' }) + '"' + $Xml + '"'
     $lnk.WorkingDirectory = Split-Path -Parent $Xml
     $lnk.IconLocation = "$Mpv,0"
     $lnk.Description = "Open $Name in mpv"
     $lnk.Save()
     Write-Host "Made $(Join-Path $dir $file)"
 }
-Write-Host "Opens: $Xml"
+Write-Host ("Opens: $Xml" + $(if ($Preview) { "  (look only)" } else { "" }))
 Write-Host "To pin it: Start menu, right-click '$Name', Pin to taskbar." -ForegroundColor Green
