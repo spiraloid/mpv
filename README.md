@@ -52,6 +52,26 @@ Do this once per file type for `.jpg`, `.jpeg`, `.png`, `.mp4`, `.mp3`, `.wav`:
 > (Get-Command mpv).Source
 > ```
 
+### One click to a review
+
+Make a shortcut that opens one review XML in mpv, for the Dock or the taskbar. The paths are written into it, so each computer makes its own.
+
+**Mac.** Run from this folder, with `mpv` and `mpv.app` beside the script (`./appmaker.sh mpv` makes the app):
+
+```bash
+./reviewapp.sh "/path/to/review.xml"
+```
+
+It makes `~/Applications/<Folder> Review.app` (the XML's folder name; a second argument names it yourself). Drag it onto the Dock. If the XML's drive isn't mounted, it says so instead of opening an empty player.
+
+**Windows.** Run in PowerShell from this folder:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\reviewapp.ps1 "D:\path\to\review.xml"
+```
+
+It puts a shortcut in the Start menu and on the Desktop; right-click the Start menu one and pick **Pin to taskbar**. It uses the `mpv.exe` beside the script, else the one on PATH; `-Mpv "C:\path\to\mpv.exe"` picks another.
+
 ### Check it works
 
 1. `mpv --version` runs, and `mpv --vf=help` lists `scdet` (the scene-cut filter the shot scan uses).
