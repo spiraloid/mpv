@@ -1586,6 +1586,8 @@ end
 -- A row of text buttons centred across the top of the picture, no backgrounds:
 -- gray when off, white under the mouse, the state's own colour with a bar under
 -- it when set. b.star draws the star before the text (filled when set).
+-- b.toggle is a switch, apart from the states: a divider before it, a box before
+-- the text (ticked when on), no bar; b.off greys it and takes no click.
 local button_events
 do
 local ROW = {slot = 250, fs = 30, bar = 4, star = 28, note_gap = 34}   -- note_gap: row to the note under it
@@ -1675,9 +1677,14 @@ local function row_events(events, list, vx0, vy0, vw, k)
     -- backdrop shows how far it reaches
     local hy0, hy1 = vy0, y + h + 22 * k
     for _, b in ipairs(list) do
-        local hot = hovered == b.name
-        local col = b.lit and b.color or (hot and "FFFFFF" or STAR.off)
+        local hot = hovered == b.name and not b.off
+        local col = b.off and "707070" or (b.lit and b.color or (hot and "FFFFFF" or STAR.off))
         local cx, cy = x + w / 2, y + h / 2
+        if b.toggle then   -- a thin line between the states and the switch
+            events[#events + 1] = string.format(
+                "{\\an7\\pos(0,0)\\p1\\bord%.2f\\shad0\\1c&HFFFFFF&\\1a&H70&\\3c&H000000&\\3a&H90&}m %.1f %.1f l %.1f %.1f %.1f %.1f %.1f %.1f{\\p0}",
+                0.8 * k, x - k, cy - 18 * k, x + k, cy - 18 * k, x + k, cy + 18 * k, x - k, cy + 18 * k)
+        end
         if hot then
             local x0, x1, r = x + 10 * k, x + w - 10 * k, 12 * k
             events[#events + 1] = string.format(
@@ -1691,6 +1698,7 @@ local function row_events(events, list, vx0, vy0, vw, k)
         end
         local fs = ROW.fs * k
         local text_w = #b.text * fs * 0.37              -- near enough for centring
+        if b.toggle then text_w = B.text_w(b.text, fs) * 1.1 end   -- measured (bold runs a little wider): the box sits beside it
         local tx = cx
         if b.star then
             local ss = ROW.star * k
@@ -1708,11 +1716,34 @@ local function row_events(events, list, vx0, vy0, vw, k)
                 "{\\an7\\pos(0,0)\\p1\\bord%.2f\\shad0\\1a&HFF&\\3c&H%s&\\3a&H00&}%s{\\p0}",
                 s, col, icon_path("star", sx, cy - ss / 2, s))
             tx = sx + ss + 8 * k + text_w / 2
+        elseif b.toggle then   -- the box: outlined when off, filled and ticked when on
+            local ss = 24 * k
+            local sx, sy = cx - (ss + 10 * k + text_w) / 2, cy - ss / 2
+            events[#events + 1] = string.format(
+                "{\\an7\\pos(0,0)\\p1\\bord%.2f\\shad0\\1c&H%s&\\1a&H%s&\\3c&H000000&\\3a&H60&}m %.1f %.1f l %.1f %.1f %.1f %.1f %.1f %.1f{\\p0}",
+                2 * k, col, b.lit and "00" or "FF", sx, sy, sx + ss, sy, sx + ss, sy + ss, sx, sy + ss)
+            if b.lit then   -- the tick: a line out and back, so only its edge draws
+                events[#events + 1] = string.format(
+                    "{\\an7\\pos(0,0)\\p1\\bord%.2f\\shad0\\1a&HFF&\\3c&H000000&\\3a&H00&}m %.1f %.1f l %.1f %.1f %.1f %.1f %.1f %.1f{\\p0}",
+                    1.6 * k, sx + ss * 0.22, sy + ss * 0.52, sx + ss * 0.43, sy + ss * 0.73,
+                    sx + ss * 0.79, sy + ss * 0.27, sx + ss * 0.43, sy + ss * 0.73)
+            else            -- off: the box's own edge, in the label's colour
+                events[#events + 1] = string.format(
+                    "{\\an7\\pos(0,0)\\p1\\bord%.2f\\shad0\\1a&HFF&\\3c&H%s&\\3a&H00&}m %.1f %.1f l %.1f %.1f %.1f %.1f %.1f %.1f{\\p0}",
+                    1.2 * k, col, sx, sy, sx + ss, sy, sx + ss, sy + ss, sx, sy + ss)
+            end
+            tx = sx + ss + 10 * k + text_w / 2
         end
         events[#events + 1] = string.format(
             "{\\an5\\pos(%.1f,%.1f)\\bord%.2f\\shad0\\b1\\q2\\3c&H000000&\\3a&H60&\\1c&H%s&\\1a&H00&\\fs%.1f}%s",
             tx, cy, 2 * k, col, fs, ass_text(b.text))
-        if b.lit then   -- a bar under the set state
+        if b.toggle then
+            if b.lit and list.by and not list.state then   -- comp alone: who switched it on
+                events[#events + 1] = string.format(
+                    "{\\an4\\pos(%.1f,%.1f)\\bord%.2f\\shad0\\q2\\3c&H000000&\\3a&H50&\\1c&HD0D0D0&\\1a&H00&\\fs%.1f}·  %s",
+                    tx + text_w / 2 + 8 * k, cy + 2 * k, 1.5 * k, 21 * k, ass_text(list.by))
+            end
+        elseif b.lit then   -- a bar under the set state
             local bw = (b.star and (ROW.star * k + 8 * k) or 0) + text_w
             events[#events + 1] = string.format(
                 "{\\an7\\pos(0,0)\\p1\\bord%.2f\\shad0\\1c&H%s&\\1a&H00&\\3c&H000000&\\3a&H60&}m %.1f %.1f l %.1f %.1f l %.1f %.1f l %.1f %.1f{\\p0}",
@@ -1724,7 +1755,7 @@ local function row_events(events, list, vx0, vy0, vw, k)
                     cx + bw / 2 + 8 * k, cy + 2 * k, 1.5 * k, 21 * k, ass_text(list.by))
             end
         end
-        buttons[#buttons + 1] = {name = b.name, x0 = x, y0 = hy0, x1 = x + w, y1 = hy1, enabled = true}
+        buttons[#buttons + 1] = {name = b.name, x0 = x, y0 = hy0, x1 = x + w, y1 = hy1, enabled = not b.off}
         x = x + w
     end
     if list.step and not list.box then   -- an imported note, being stepped through
@@ -2749,8 +2780,11 @@ end
 --   {"saved": "...", "by": "...",
 --    "shots": {"21": {"file": "shots/F_runs/v.012/21.mp4", "mark": "reroll", "note": ""}}}
 -- file is relative to the XML's folder and is always an original, never a copy;
--- mark is the shot's state: reroll / recirculate / comp / final, or null (an
--- older "candidate" is kept as read but can't be set). Only shots with a choice
+-- mark is the shot's state: reroll / recirculate / final, or null (an older
+-- "candidate" is kept as read but can't be set). "comp": true is a switch
+-- beside the state, written only when it's on: comp this take, or with re-roll
+-- or re-circulate, comp the new one (an older "mark": "comp" reads as the
+-- switch on with no state). Only shots with a choice
 -- are in it. The project's own scripts (review_save_cmds) then apply it to the
 -- folders and rebuild the XML; review_open_cmd rebuilds it before each open.
 
@@ -2758,9 +2792,10 @@ end
 local MARKS = {
     {name = "reroll", label = "re-roll", color = "1E8CE0", text = "Mark for re-roll", key = "r"},
     {name = "recirculate", label = "re-circulate", color = "E0A040", text = "Mark for re-circulation", key = "c"},
-    {name = "comp", label = "comp", color = "D070B0", text = "Mark for comp", key = "m"},
     {name = "final", label = "final", color = STAR.on, text = "Mark as final", key = "a", star = true},
 }
+-- the switch after them: on or off, whatever the state
+MARKS.comp = {name = "comp", label = "comp", color = "D070B0", key = "m"}
 local MARK_TEXT = {candidate = "Accept as candidate"}
 for _, m in ipairs(MARKS) do MARK_TEXT[m.name] = m.text end
 local review_busy = false
@@ -2929,7 +2964,9 @@ local function read_selects(r)
     if type(t) == "table" and type(t.shots) == "table" then
         for num, e in pairs(t.shots) do
             if type(e) == "table" and type(e.file) == "string" then
-                out[tostring(num)] = {file = e.file, mark = type(e.mark) == "string" and e.mark or nil,
+                local mark, comp = type(e.mark) == "string" and e.mark or nil, e.comp == true
+                if mark == "comp" then mark, comp = nil, true end   -- an older save: comp was a state then
+                out[tostring(num)] = {file = e.file, mark = mark, comp = comp,
                                       note = type(e.note) == "string" and e.note or "",
                                       by = type(e.by) == "string" and e.by or nil}
             end
@@ -2961,8 +2998,9 @@ local function selects_text(shots, imported)
     local rows = {}
     for _, num in ipairs(nums) do
         local e = shots[num]
-        rows[#rows + 1] = string.format('  %s: {"file": %s, "mark": %s, "note": %s%s}', json_str(num),
-            json_str(e.file), e.mark and json_str(e.mark) or "null", json_str(e.note or ""),
+        rows[#rows + 1] = string.format('  %s: {"file": %s, "mark": %s,%s "note": %s%s}', json_str(num),
+            json_str(e.file), e.mark and json_str(e.mark) or "null", e.comp and ' "comp": true,' or "",
+            json_str(e.note or ""),
             e.by and (', "by": ' .. json_str(e.by)) or "")
     end
     local imp = {}
@@ -3119,6 +3157,16 @@ end
 -- A shot's note: one line of plain text saved in its entry's "note". This
 -- session's edit, else the saved one.
 local notes = {}
+-- The comp switch, kept with the state: on only for the file it was set on
+function notes.comp_of(r, shot)
+    if not shot.num then return false end
+    local file = slash(shot.file or shot.play or "")
+    local mine = r.marks[shot.num]
+    if mine then return mine.file == file and mine.comp == true end
+    if r.cleared[shot.num] then return false end
+    local b = r.base[shot.num]
+    return (b and b.comp == true and slash(abs_file(r, b.file)) == file) or false
+end
 function notes.of(r, num)
     if r.notes[num] ~= nil then return r.notes[num] end
     local b = r.base and r.base[num]
@@ -3554,7 +3602,7 @@ end
 function notes.apply(r, shot, it)
     local num, file = shot.num, slash(shot.file or shot.play or "")
     r.notes[num] = it.text
-    r.marks[num] = {file = file, mark = it.mark or false}
+    r.marks[num] = {file = file, mark = it.mark or false, comp = it.comp or false}
     r.touched[num], r.cleared[num] = true, nil
     notes.touch(r, num)
     it.applied = true
@@ -3589,15 +3637,16 @@ function notes.import()
         num = tostring(num)
         local shot = notes.shot_for(num)
         if type(e) == "table" and type(e.note) == "string" and shot and shot.rung then
-            local mark = type(e.mark) == "string" and e.mark or nil
+            local mark, comp = type(e.mark) == "string" and e.mark or nil, e.comp == true
+            if mark == "comp" then mark, comp = nil, true end
             local known = false
             for _, m in ipairs(MARKS) do if m.name == mark then known = true end end
-            local it = {text = trim(e.note:gsub("[%c]+", " ")), mark = known and mark or nil,
+            local it = {text = trim(e.note:gsub("[%c]+", " ")), mark = known and mark or nil, comp = comp,
                         file = type(e.file) == "string" and slash(abs_file(r, e.file)) or nil,
                         label = type(e.label) == "string" and e.label or num,
                         reviewer = type(j.reviewer) == "string" and j.reviewer or nil}
             local cur = slash(shot.file or shot.play or "")
-            local own = notes.of(r, num) ~= "" or mark_of(r, shot) ~= nil
+            local own = notes.of(r, num) ~= "" or mark_of(r, shot) ~= nil or notes.comp_of(r, shot)
             if (not it.file or it.file == cur) and not own then
                 notes.apply(r, shot, it)
                 attached = attached + 1
@@ -3716,9 +3765,9 @@ function notes.step_mark(name)
     local r, shot = current_review(), current_shot()
     local it = notes.stepping(r, shot)
     if not it then return false end
-    it.mark = it.mark ~= name and name or nil
+    if name == "comp" then it.comp = not it.comp else it.mark = it.mark ~= name and name or nil end
     if it.applied then
-        r.marks[shot.num] = {file = slash(shot.file or shot.play or ""), mark = it.mark or false}
+        r.marks[shot.num] = {file = slash(shot.file or shot.play or ""), mark = it.mark or false, comp = it.comp or false}
         notes.touch(r, shot.num)
     end
     render(true)
@@ -3733,13 +3782,13 @@ function notes.step_edit()
     return true
 end
 
--- The row across the top: one state per shot, the set one lit
+-- The row across the top: one state per shot, the set one lit, then the comp switch
 review_buttons = function(shot)
     local r = current_review()
     if not r or review_busy or not shot.rung or not shot.num or shot.missing or shot.retired then return nil end
     if r.preview then return {row = true, preview = "PREVIEW  ·  " .. lock.who(r.preview) .. "  ·  nothing can be saved"} end
-    local cur = mark_of(r, shot)
-    local list = {row = true, note = notes.of(r, shot.num), by = cur and notes.by_of(r, shot.num) or nil}
+    local cur, comp = mark_of(r, shot), notes.comp_of(r, shot)
+    local list = {row = true, note = notes.of(r, shot.num), by = (cur or comp) and notes.by_of(r, shot.num) or nil}
     local it = notes.stepping(r, shot)
     if it then
         local order, k = notes.order(r), 0
@@ -3749,7 +3798,7 @@ review_buttons = function(shot)
         list.step = {text = it.text, k = k, n = #order, reviewer = it.reviewer,
                      stale = it.file and it.file ~= cur_file and it.label or nil,
                      saved = (saved ~= "" and saved ~= it.text) and saved or nil}
-        if not it.applied then cur, list.by = it.mark, nil end   -- the row shows the state it would get
+        if not it.applied then cur, comp, list.by = it.mark, it.comp, nil end   -- the row shows the state it would get
     end
     local b = notes.box
     if b and b.num == shot.num then
@@ -3757,7 +3806,11 @@ review_buttons = function(shot)
     end
     for _, m in ipairs(MARKS) do
         list[#list + 1] = {name = m.name, text = m.label, color = m.color, star = m.star, lit = cur == m.name}
+        if cur == m.name then list.state = true end
     end
+    -- a final isn't comped: the switch is there, greyed, and keeps what it was
+    list[#list + 1] = {name = "comp", text = MARKS.comp.label, color = MARKS.comp.color, toggle = true,
+                       lit = comp and cur ~= "final", off = cur == "final"}
     return list
 end
 
@@ -3784,15 +3837,26 @@ local function set_mark(name)
     end
     if notes.step_mark(name) then return end   -- stepping an imported note: its state
     local file = slash(shot.file or shot.play)
-    local new = mark_of(r, shot) ~= name and name or false
-    r.marks[shot.num] = {file = file, mark = new}
+    local cur, comp = mark_of(r, shot), notes.comp_of(r, shot)
+    local ask   -- open the note box: a state was set, or comp went on with no state
+    if name == "comp" then   -- the switch: flips, and leaves the state alone
+        if cur == "final" then osd("a final isn't comped", 1.5); return end
+        comp = not comp
+        ask = comp and not cur
+    else                     -- a state: the same key again clears it; comp stays as it is
+        cur = cur ~= name and name or false
+        ask = cur
+    end
+    r.marks[shot.num] = {file = file, mark = cur or false, comp = comp}
     notes.touch(r, shot.num)
     r.touched[shot.num], r.cleared[shot.num] = true, nil
     if not mp.get_property_bool("pause") then   -- the row is hidden while playing
-        osd((shot.label or shot.name) .. "  ·  " .. (new and MARK_TEXT[new] or "state cleared"), 2)
+        local said = cur and MARK_TEXT[cur] or nil
+        if comp and cur ~= "final" then said = said and (said .. " + comp") or "comp" end
+        osd((shot.label or shot.name) .. "  ·  " .. (said or "state cleared"), 2)
     end
     render(true)
-    if new then notes.edit(shot) end   -- a state set: what the room said about it
+    if ask then notes.edit(shot) end   -- what the room said about it
 end
 review_click = set_mark
 
@@ -3821,14 +3885,14 @@ local function review_entry(r, shot)
     if r.cleared[shot.num] then return nil end
     local file = shot.file or shot.play
     if not file then return nil end
-    local mark = mark_of(r, shot)
+    local mark, comp = mark_of(r, shot), notes.comp_of(r, shot)
     local b = r.base[shot.num]
     -- never chosen and not marked: only a version other than the XML's own is a choice
     local note = notes.of(r, shot.num)
-    if not b and not mark and note == "" and slash(file) == slash(shot.xml_orig or "") then return nil end
-    -- who: only while there is a state or a note to answer for
-    local by = (mark or note ~= "") and notes.by_of(r, shot.num) or nil
-    return {file = file, mark = mark, note = note, by = by}
+    if not b and not mark and not comp and note == "" and slash(file) == slash(shot.xml_orig or "") then return nil end
+    -- who: only while there is a state, the comp switch or a note to answer for
+    local by = (mark or comp or note ~= "") and notes.by_of(r, shot.num) or nil
+    return {file = file, mark = mark, comp = comp, note = note, by = by}
 end
 
 -- This session's shots whose entry differs from the saved one: {num, entry}
@@ -3842,6 +3906,7 @@ local function review_changes(r)
             local same
             if not e or not b then same = (e == nil and b == nil)
             else same = slash(abs_file(r, b.file)) == slash(e.file) and b.mark == e.mark
+                        and (b.comp == true) == (e.comp == true)
                         and (b.note or "") == (e.note or "") and b.by == e.by end
             if not same then out[#out + 1] = {num = num, entry = e} end
         end
@@ -3855,7 +3920,7 @@ local function short_line(s) return #s > 118 and (s:sub(1, 115) .. "…") or s e
 -- project prints for the marked shots ("to reroll: /go 07", "both in one run: ...")
 local function must_show(line)
     return line:upper():find("WARNING", 1, true) ~= nil or line:match("^%s*to %a[%w%- ]*:") ~= nil
-           or line:match("^%s*both in one run:") ~= nil
+           or line:match("^%s*both in one run:") ~= nil or line:match("^%s*comp after the roll:") ~= nil
 end
 
 local function show_result(r)
@@ -3914,7 +3979,8 @@ local function save_review(done)
         if c.entry and not rel then
             osd("not saved: " .. name_of(c.entry.file) .. " is outside " .. name_of(r.root), 4); return
         end
-        shots[c.num] = c.entry and {file = rel, mark = c.entry.mark, note = c.entry.note, by = c.entry.by} or nil
+        shots[c.num] = c.entry and {file = rel, mark = c.entry.mark, comp = c.entry.comp, note = c.entry.note,
+                                    by = c.entry.by} or nil
     end
     -- the notes files imported so far: the ones already listed and this session's
     local imported, seen = {}, {}
@@ -4028,6 +4094,7 @@ local function bind_review_keys(on)
     for _, m in ipairs(MARKS) do
         list[#list + 1] = {m.key, m.name, function() set_mark(m.name) end}
     end
+    list[#list + 1] = {MARKS.comp.key, "comp", function() set_mark("comp") end}
     for _, key in ipairs({"Ctrl+S", "Ctrl+Shift+s", "Meta+s"}) do
         list[#list + 1] = {key, "save_" .. key, function() save_review() end}
     end

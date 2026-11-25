@@ -119,7 +119,8 @@ Press `h` in mpv for the same list on screen.
 | `WHEEL_UP` / `WHEEL_DOWN` | Previous / next shot, one per notch (XML) |
 | `UP` / `DOWN` | XML in rung folders: the shot's history. `UP` older (to the cleaned plate), `DOWN` newer (to the final). Pauses on the shot if it was playing |
 | `o` | Show / hide the shot label and buttons (outside an XML: mpv's progress bar) |
-| `r` / `c` / `m` / `a` | Review: shot state **re-roll** / **re-circulate** / **comp** / **final**. The same key again clears it. Or click the row across the top (shown while paused). Setting a state opens the note box |
+| `r` / `c` / `a` | Review: shot state **re-roll** / **re-circulate** / **final**. The same key again clears it. Or click the row across the top (shown while paused). Setting a state opens the note box |
+| `m` | Review: the **comp** switch, on or off beside the state |
 | `i` | Review: import the next notes file from a recorded review |
 | `Tab` / `Shift+Tab` | Review: step to the next / previous imported note (`Enter` accepts, `x` skips, `Esc` stops) |
 | `n` | Review: edit the shot's note (one line; Enter keeps it, Esc leaves it as it was) |
@@ -185,14 +186,24 @@ A shot's file is one named for its shot number: `07.mp4` or `07_v4.mp4`, anywher
 
 Each press swaps that version into the slot, on the same frame (pressed during playback, it pauses on the shot's first frame), and a note shows where you are (`07 run 12 · 4 / 9`). The swap is held in memory: nothing is written until you save.
 
-**Shot state.** Pause on a shot and a row of four text buttons appears across the top of the picture. One state per shot, on the version showing: click one (or press its key) to set it, click the set one again to clear it. A set state is drawn in its colour with a bar under it; the others are gray.
+**Shot state.** Pause on a shot and a row of text buttons appears across the top of the picture: three states, a divider, then the comp switch. One state per shot, on the version showing: click one (or press its key) to set it, click the set one again to clear it. A set state is drawn in its colour with a bar under it; the others are gray.
 
 | Button | Key | Means |
 |--------|-----|-------|
 | re-roll | `r` | **Mark for re-roll**: make a new run of the shot |
 | re-circulate | `c` | **Mark for re-circulation**: make a new driver from this take, then re-roll |
-| comp | `m` | **Mark for comp**: make a candidate from it |
 | ★ final | `a` | **Mark as final**: the star fills yellow |
+
+**The comp switch** (`m`, or click it) sits after the divider with a box before its name: ticked when on. It is on or off whatever the state, and setting or clearing a state leaves it alone.
+
+| With | Comp on means |
+|------|------|
+| no state | Make a candidate from this take |
+| re-roll | Roll, then comp the new take |
+| re-circulate | Refine, roll, then comp the new take |
+| ★ final | Nothing: the switch is greyed and takes no click, and keeps what it was |
+
+`x` clears the state and the switch, and so does stepping the shot to another version. Switching comp on with no state opens the note box.
 
 Setting a state opens a box under the row, **Notes for NN**, filled with the shot's current note: type what the room said and press `Enter`, or `Esc` to leave the note as it was. Long text wraps, and the box grows a line at a time. `n` opens the same box without changing the state. While it's open every key types or edits:
 
@@ -231,12 +242,13 @@ If a script is missing or fails, the card says so, word for word, and the choice
  "by": "name",
  "shots": {
   "07": {"file": "shots/F_runs/v.012/07.mp4", "mark": "reroll", "note": ""},
+  "12": {"file": "shots/F_runs/v.012/12.mp4", "mark": "reroll", "comp": true, "note": "warmer"},
   "21": {"file": "shots/I_candidates/v.009/21.mp4", "mark": null, "note": "keep the blink"}
  }
 }
 ```
 
-`file` is relative to the XML's folder and always names an original, never a copy. `mark` is the shot state: `reroll`, `recirculate`, `comp`, `final` or `null` (a `candidate` from an older save is kept as it is). Only shots with a choice or a note are listed. `note` is the shot's one-line note from the box; a note nobody edited this session is kept as it was. `by` is who set the state or note: whoever is logged in, lowercased, or the name it maps to in the reviewers file (`review_reviewers` in `script-opts/shot_jump.conf`, `{"logins": {"login": "name"}}`). It is written when someone sets a state or edits a note, dropped when the state and note are gone, and an entry nobody touched keeps its saved `by`. The set state shows the name beside it.
+`file` is relative to the XML's folder and always names an original, never a copy. `mark` is the shot state: `reroll`, `recirculate`, `final` or `null` (a `candidate` from an older save is kept as it is). `comp` is the comp switch: `true` when on, left out when off. An older save's `"mark": "comp"` reads as the switch on with no state, and is written back that way. Only shots with a choice or a note are listed. `note` is the shot's one-line note from the box; a note nobody edited this session is kept as it was. `by` is who set the state or note: whoever is logged in, lowercased, or the name it maps to in the reviewers file (`review_reviewers` in `script-opts/shot_jump.conf`, `{"logins": {"login": "name"}}`). It is written when someone sets a state, flips the comp switch or edits a note, dropped when the state, the switch and the note are gone, and an entry nobody touched keeps its saved `by`. The set state shows the name beside it.
 
 **Opening.** The review XML is the one named by `review_xml` (default `review.xml`). Before it loads, mpv runs the project's build script so the XML matches the folders and the saved choices; every shot starts on its chosen version, with its state lit. If the script can't run, mpv says why and plays the XML as it is.
 
