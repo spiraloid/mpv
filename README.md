@@ -194,7 +194,22 @@ Each press swaps that version into the slot, on the same frame (pressed during p
 | comp | `m` | **Mark for comp**: make a candidate from it |
 | ★ final | `a` | **Mark as final**: the star fills yellow |
 
-Setting a state opens a one-line box under the row, **Notes for NN**, filled with the shot's current note: type what the room said and press `Enter`, or `Esc` to leave the note as it was. While it's open every key types (arrows, `Home` / `End` and `Backspace` edit, `Ctrl+U` empties it), and `UP` / `DOWN` don't change the version. A triple click on the box (or `Cmd+A`) selects the whole note: typing replaces it, `Backspace` clears it. `Cmd+C` / `Ctrl+C` copies the note and `Cmd+X` / `Ctrl+X` cuts it (the whole note, selected or not), and `Cmd+V` / `Ctrl+V` pastes, so a note moves between shots: copy it in one shot's box, `n` on the other shot, paste. `n` opens the same box without changing the state. The note shows under the row and is saved in the shot's `note`. The state and note belong to the version they were set on: step the shot to another version (`UP` / `DOWN`) and both clear, and stepping back doesn't bring them back.
+Setting a state opens a box under the row, **Notes for NN**, filled with the shot's current note: type what the room said and press `Enter`, or `Esc` to leave the note as it was. Long text wraps, and the box grows a line at a time. `n` opens the same box without changing the state. While it's open every key types or edits:
+
+| Key | In the note box |
+|---|---|
+| `LEFT` / `RIGHT` | Move a character |
+| `Ctrl+LEFT` / `Ctrl+RIGHT` | Move a word (`Alt` works too: macOS can keep `Ctrl`+arrows for switching desktops) |
+| `UP` / `DOWN` | First / last character (also `Home` / `End`); they don't change the version |
+| `Shift` + any of those | Select from the cursor to there |
+| `Ctrl+A` / `Cmd+A`, or a triple click | Select the whole note |
+| `Backspace` / `Delete` | Delete a character, or the selection. `Ctrl+U` empties the box |
+| `Ctrl+C` / `Cmd+C`, `Ctrl+X` / `Cmd+X` | Copy / cut the selection, or the whole note when nothing is selected |
+| `Ctrl+V` / `Cmd+V` | Paste (over the selection) |
+
+Typing replaces a selection. Copy and paste move a note between shots: copy it in one shot's box, `n` on the other shot, paste.
+
+The note shows under the row and is saved in the shot's `note`. The state and note belong to the version they were set on: step the shot to another version (`UP` / `DOWN`) and both clear, and stepping back doesn't bring them back.
 
 The project's scripts act on these on save and print the next step for each marked shot (`to reroll: …`); the save card always shows those lines.
 

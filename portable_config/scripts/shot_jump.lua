@@ -1588,7 +1588,62 @@ end
 -- it when set. b.star draws the star before the text (filled when set).
 local button_events
 do
-local ROW = {slot = 250, fs = 30, bar = 4, star = 28}
+local ROW = {slot = 250, fs = 30, bar = 4, star = 28, note_gap = 34}   -- note_gap: row to the note under it
+local UTF8 = "[%z\1-\127\194-\244][\128-\191]*"
+local function esc(s)   -- braces would start a tag; a backslash gets a zero-width space after it
+    return (s:gsub("[{}]", "\\%0"):gsub("\\([^{}])", "\\\226\128\139%1"):gsub("\\$", "\\\226\128\139"))
+end
+-- Text widths come from the renderer itself (a hidden overlay), so the note box
+-- can wrap its text and put the cursor and the selection where the letters are.
+local measure = mp.create_osd_overlay("ass-events")
+measure.hidden, measure.compute_bounds = true, true
+local widths, widths_n = {}, 0
+local function ink(text, fs)   -- the drawn width of a line of text, in pixels
+    local d = mp.get_property_native("osd-dimensions")
+    if not d or not d.w or d.w <= 0 then return nil end
+    measure.res_x, measure.res_y = d.w, d.h
+    measure.data = string.format("{\\an7\\pos(0,0)\\bord0\\shad0\\q2\\fs%.2f}", fs) .. text
+    local r = measure:update()
+    return r and r.x0 and r.x1 and r.x1 > r.x0 and (r.x1 - r.x0) or nil
+end
+-- how far a string moves the pen (spaces at its ends included): measured between two bars
+function B.text_w(s, fs)
+    if s == "" then return 0 end
+    local key = string.format("%.2f:", fs) .. s
+    local w = widths[key]
+    if w then return w end
+    local bars = widths[string.format("%.2f|", fs)] or ink("||", fs)
+    local both = bars and ink("|" .. esc(s) .. "|", fs)
+    if both then
+        widths[string.format("%.2f|", fs)] = bars
+        w = math.max(0, both - bars)
+    else   -- no renderer to ask (no window yet): near enough
+        local n = 0
+        for _ in s:gmatch(UTF8) do n = n + 1 end
+        return n * fs * 0.47
+    end
+    if widths_n > 4000 then widths, widths_n = {}, 0 end
+    widths[key], widths_n = w, widths_n + 1
+    return w
+end
+-- one character's width, from ten in a row (whole pixels would add up wrong)
+local function char_w(ch, fs) return B.text_w(string.rep(ch, 10), fs) / 10 end
+-- break characters into lines no wider than `width`, at spaces where it can:
+-- a list of {first, last} character numbers, one per line (never empty)
+function B.wrap(chars, width, fs)
+    local lines, a, x, brk, xb = {}, 1, 0, nil, 0   -- brk: the last space on this line, xb: the width up to it
+    for i = 1, #chars do
+        local w = char_w(chars[i], fs)
+        if x + w > width and i > a and chars[i] ~= " " then
+            if brk then lines[#lines + 1] = {a, brk}; a, x, brk = brk + 1, x - xb, nil
+            else lines[#lines + 1] = {a, i - 1}; a, x = i, 0 end
+        end
+        x = x + w
+        if chars[i] == " " then brk, xb = i, x end
+    end
+    lines[#lines + 1] = {a, #chars}
+    return lines
+end
 local function row_events(events, list, vx0, vy0, vw, k)
     if list.preview then   -- someone else is editing this review: say so where the row would be
         events[#events + 1] = string.format(
@@ -1656,13 +1711,10 @@ local function row_events(events, list, vx0, vy0, vw, k)
         buttons[#buttons + 1] = {name = b.name, x0 = x, y0 = hy0, x1 = x + w, y1 = hy1, enabled = true}
         x = x + w
     end
-    local function esc(s)   -- braces would start a tag; a backslash gets a zero-width space after it
-        return (s:gsub("[{}]", "\\%0"):gsub("\\([^{}])", "\\\226\128\139%1"):gsub("\\$", "\\\226\128\139"))
-    end
     if list.step and not list.box then   -- an imported note, being stepped through
         local st = list.step
         local bw, fs = 1100 * k, 26 * k
-        local x0, y0 = vx0 + (vw - bw) / 2, y + h + 8 * k
+        local x0, y0 = vx0 + (vw - bw) / 2, y + h + ROW.note_gap * k
         -- long notes wrap inside the panel (at most four lines each)
         local function wrapped(s, width)
             local out, line = {}, ""
@@ -1698,60 +1750,73 @@ local function row_events(events, list, vx0, vy0, vw, k)
         end
         return
     end
-    if list.box then   -- the note box, open on this shot
+    if list.box then   -- the note box, open on this shot: it grows a line at a time
         local bx = list.box
-        local bw, bh, fs = 1000 * k, 50 * k, 28 * k
-        local x0, y0 = vx0 + (vw - bw) / 2, y + h + 8 * k
-        B.note_rect = {x0, y0, x0 + bw, y0 + bh}   -- for clicks on the box
+        local bw, fs = 1000 * k, 28 * k
+        local lh, pad = fs * 1.3, 7 * k
+        local x0, y0 = vx0 + (vw - bw) / 2, y + h + ROW.note_gap * k
+        local label = "Notes for " .. bx.num
+        local sx = x0 + 16 * k + B.text_w(label .. "  ", fs)        -- where the text starts, on every line
+        local lines = B.wrap(bx.chars, x0 + bw - 16 * k - sx, fs)
+        local bh = #lines * lh + 2 * pad
+        B.note_rect, B.note_lines = {x0, y0, x0 + bw, y0 + bh}, #lines   -- for clicks on the box
+        local function rect(colour, alpha, xa, ya, xb, yb)
+            events[#events + 1] = string.format(
+                "{\\an7\\pos(0,0)\\p1\\bord0\\shad0\\1c&H%s&\\1a&H%s&}m %.1f %.1f l %.1f %.1f %.1f %.1f %.1f %.1f{\\p0}",
+                colour, alpha, xa, ya, xb, ya, xb, yb, xa, yb)
+        end
         events[#events + 1] = string.format(
             "{\\an7\\pos(0,0)\\p1\\bord%.2f\\shad0\\1c&H000000&\\1a&H40&\\3c&HFFFFFF&\\3a&H90&}m %.1f %.1f l %.1f %.1f %.1f %.1f %.1f %.1f{\\p0}",
             1.5 * k, x0, y0, x0 + bw, y0, x0 + bw, y0 + bh, x0, y0 + bh)
-        if bx.sel then   -- the whole note selected: dark text on a highlight
-            local label_w = (#("Notes for " .. bx.num) + 2) * fs * 0.42
-            local all = bx.before .. bx.after
-            local n = 0
-            for _ in all:gmatch("[%z\1-\127\194-\244][\128-\191]*") do n = n + 1 end
-            local shown = n > 72 and (all:match("^" .. string.rep("[%z\1-\127\194-\244][\128-\191]*", 72)) .. "…") or all
-            local tw = math.min(bw - label_w - 32 * k, math.min(n, 73) * fs * 0.47)
-            local sx = x0 + 16 * k + label_w
-            events[#events + 1] = string.format(
-                "{\\an7\\pos(0,0)\\p1\\bord0\\shad0\\1c&HE0B060&\\1a&H00&}m %.1f %.1f l %.1f %.1f %.1f %.1f %.1f %.1f{\\p0}",
-                sx - 4 * k, y0 + 9 * k, sx + tw + 4 * k, y0 + 9 * k, sx + tw + 4 * k, y0 + bh - 9 * k, sx - 4 * k, y0 + bh - 9 * k)
-            events[#events + 1] = string.format(
-                "{\\an4\\pos(%.1f,%.1f)\\bord0\\shad0\\q2\\1c&H909090&\\1a&H00&\\fs%.1f}%s",
-                x0 + 16 * k, y0 + bh / 2, fs, "Notes for " .. bx.num)
-            events[#events + 1] = string.format(   -- the text where its highlight starts
-                "{\\an4\\pos(%.1f,%.1f)\\bord0\\shad0\\q2\\1c&H000000&\\1a&H00&\\fs%.1f}%s",
-                sx, y0 + bh / 2, fs, esc(shown))
-            events[#events + 1] = string.format(
-                "{\\an8\\pos(%.1f,%.1f)\\bord%.2f\\shad0\\q2\\3c&H000000&\\3a&H50&\\1c&HB0B0B0&\\1a&H00&\\fs%.1f}%s",
-                vx0 + vw / 2, y0 + bh + 6 * k, 1.5 * k, 20 * k, "all selected  ·  type to replace  ·  Cmd/Ctrl+X cuts  ·  Cmd/Ctrl+C copies")
-            return
-        end
-        -- keep the cursor in view: show at most ~70 characters before it
-        local before = bx.before
-        local n = 0
-        for _ in before:gmatch("[%z\1-\127\194-\244][\128-\191]*") do n = n + 1 end
-        if n > 70 then
-            local skip = n - 70
-            before = "…" .. before:gsub("^" .. string.rep("[%z\1-\127\194-\244][\128-\191]*", skip), "")
-        end
         events[#events + 1] = string.format(
-            "{\\an4\\pos(%.1f,%.1f)\\bord0\\shad0\\q2\\1c&H909090&\\1a&H00&\\fs%.1f}%s  " ..
-            "{\\1c&HFFFFFF&}%s{\\1c&H40C0FF&}|{\\1c&HFFFFFF&}%s",
-            x0 + 16 * k, y0 + bh / 2, fs, "Notes for " .. bx.num, esc(before), esc(bx.after))
+            "{\\an4\\pos(%.1f,%.1f)\\bord0\\shad0\\q2\\1c&H909090&\\1a&H00&\\fs%.2f}%s",
+            x0 + 16 * k, y0 + pad + lh / 2, fs, label)
+        local lo, hi = bx.pos, bx.pos   -- the selection: characters lo+1 .. hi
+        if bx.anchor then lo, hi = math.min(bx.anchor, bx.pos), math.max(bx.anchor, bx.pos) end
+        local function part(a, b) return a > b and "" or table.concat(bx.chars, "", a, b) end
+        local cur   -- the line the cursor is on: a position at a line's end shows at the start of the next
+        for i, ln in ipairs(lines) do
+            local a, b = ln[1], ln[2]
+            local cy = y0 + pad + (i - 0.5) * lh
+            if not cur and (bx.pos < b or i == #lines) then cur = i end
+            local s1, s2 = math.max(lo + 1, a), math.min(hi, b)   -- the selected characters on this line
+            local text
+            if s1 <= s2 then   -- dark text on a highlight
+                rect("E0B060", "00", sx + B.text_w(part(a, s1 - 1), fs), cy - lh / 2 + k,
+                     sx + B.text_w(part(a, s2), fs), cy + lh / 2 - k)
+                text = esc(part(a, s1 - 1)) .. "{\\1c&H000000&}" .. esc(part(s1, s2)) ..
+                       "{\\1c&HFFFFFF&}" .. esc(part(s2 + 1, b))
+            else
+                text = esc(part(a, b))
+            end
+            if bx.chars[a] == " " then text = "\226\128\139" .. text end   -- or a space that starts the line is dropped
+            events[#events + 1] = string.format(
+                "{\\an4\\pos(%.1f,%.1f)\\bord0\\shad0\\q2\\1c&HFFFFFF&\\1a&H00&\\fs%.2f}%s", sx, cy, fs, text)
+            if cur == i then   -- the cursor: a bar between the letters, drawn over them, taking no room
+                local cx = sx + B.text_w(part(a, bx.pos), fs)
+                rect("40C0FF", "00", cx - k, cy - fs * 0.55, cx + k, cy + fs * 0.55)
+            end
+        end
         events[#events + 1] = string.format(
             "{\\an8\\pos(%.1f,%.1f)\\bord%.2f\\shad0\\q2\\3c&H000000&\\3a&H50&\\1c&HB0B0B0&\\1a&H00&\\fs%.1f}%s",
-            vx0 + vw / 2, y0 + bh + 6 * k, 1.5 * k, 20 * k, "Enter saves the note  ·  Esc leaves it as it was  ·  Cmd/Ctrl+C X V copy, cut, paste")
+            vx0 + vw / 2, y0 + bh + 6 * k, 1.5 * k, 20 * k,
+            lo < hi and "selected  ·  type to replace  ·  Cmd/Ctrl+C copies  ·  Cmd/Ctrl+X cuts"
+            or "Enter saves the note  ·  Esc leaves it as it was  ·  Shift+arrows select  ·  Cmd/Ctrl+C X V copy, cut, paste")
         return
     end
-    if list.note and list.note ~= "" then   -- the shot's note, under the row
-        local note = list.note
-        if #note > 140 then note = note:sub(1, 137):gsub("[\128-\191]*$", ""):gsub("[\192-\255]$", "") .. "…" end
-        note = esc(note)
-        events[#events + 1] = string.format(
-            "{\\an8\\pos(%.1f,%.1f)\\bord%.2f\\shad0\\q0\\3c&H000000&\\3a&H50&\\1c&HFFFFFF&\\1a&H00&\\fs%.1f}%s",
-            vx0 + vw / 2, y + h + 6 * k, 2 * k, 28 * k, note)
+    if list.note and list.note ~= "" then   -- the shot's note, under the row, wrapped like the box
+        local chars = {}
+        for ch in list.note:gmatch(UTF8) do chars[#chars + 1] = ch end
+        local fs = 28 * k
+        local lines = B.wrap(chars, 968 * k, fs)
+        for i, ln in ipairs(lines) do
+            if i > 4 then break end
+            local s = table.concat(chars, "", ln[1], ln[2])
+            if i == 4 and #lines > 4 then s = s .. " …" end
+            events[#events + 1] = string.format(
+                "{\\an8\\pos(%.1f,%.1f)\\bord%.2f\\shad0\\q2\\3c&H000000&\\3a&H50&\\1c&HFFFFFF&\\1a&H00&\\fs%.2f}%s",
+                vx0 + vw / 2, y + h + (ROW.note_gap + 9) * k + (i - 1) * fs * 1.3, 2 * k, fs, esc(s))
+        end
     end
 end
 
@@ -3083,7 +3148,8 @@ function notes.close(keep)
     local b = notes.box
     if not b then return end
     notes.box = nil
-    B.note_rect, B.box_click = nil, nil
+    B.note_rect, B.box_click, B.note_lines = nil, nil, nil
+    notes.report()
     for _, name in ipairs(notes.keys) do mp.remove_key_binding(name) end
     notes.keys = {}
     if keep and b.on_keep then
@@ -3105,14 +3171,40 @@ function notes.edit(shot, prefill, on_keep)
     if notes.box then notes.close(true) end
     mp.set_property_bool("pause", true)   -- the row, and so the box, shows while paused
     local chars = notes.chars(prefill or notes.of(r, shot.num))
+    -- pos: characters before the cursor.  anchor: where a selection began (nil: none);
+    -- the selection is what lies between the anchor and the cursor
     notes.box = {r = r, num = shot.num, chars = chars, pos = #chars, on_keep = on_keep}
     local b = notes.box
-    local function clear() b.chars, b.pos, b.sel = {}, 0, false end
+    local function range()   -- the selection, as characters lo+1 .. hi
+        if b.anchor and b.anchor ~= b.pos then return math.min(b.anchor, b.pos), math.max(b.anchor, b.pos) end
+    end
+    local function text_of(lo, hi) return table.concat(b.chars, "", lo + 1, hi) end
+    local function cut()   -- take the selection out
+        local lo, hi = range()
+        b.anchor = nil
+        if not lo then return end
+        for _ = lo + 1, hi do table.remove(b.chars, lo + 1) end
+        b.pos = lo
+        return true
+    end
+    local function clear() b.chars, b.pos, b.anchor = {}, 0, nil end
+    local function all() b.anchor, b.pos = #b.chars > 0 and 0 or nil, #b.chars end
     local function insert(s)
-        if b.sel then clear() end   -- typing over a selection replaces it
+        cut()   -- typing over a selection replaces it
         for _, ch in ipairs(notes.chars(s)) do
             if not ch:match("^%c$") then table.insert(b.chars, b.pos + 1, ch); b.pos = b.pos + 1 end
         end
+    end
+    local function word(dir)   -- the next word edge from the cursor: a word's start going left, its end going right
+        local p, n = b.pos, #b.chars
+        if dir < 0 then
+            while p > 0 and b.chars[p] == " " do p = p - 1 end
+            while p > 0 and b.chars[p] ~= " " do p = p - 1 end
+        else
+            while p < n and b.chars[p + 1] == " " do p = p + 1 end
+            while p < n and b.chars[p + 1] ~= " " do p = p + 1 end
+        end
+        return p
     end
     local function key(name, fn, complex)
         local id = "shot_note_" .. name
@@ -3120,33 +3212,57 @@ function notes.edit(shot, prefill, on_keep)
             if notes.box ~= b then return end
             if complex and e.event == "up" then return end
             fn(e)
-            if notes.box == b then render(true) end
+            if notes.box == b then render(true); notes.report() end
         end, {repeatable = true, complex = complex})
         notes.keys[#notes.keys + 1] = id
+    end
+    -- a key that moves the cursor; with Shift it stretches the selection from where
+    -- it began. edge: the end of a selection a plain Left (-1) or Right (1) drops to
+    local function go(names, to, edge)
+        for _, name in ipairs(names) do
+            key(name, function()
+                local lo, hi = range()
+                b.anchor = nil
+                if lo and edge then b.pos = edge < 0 and lo or hi else b.pos = to() end
+            end)
+            key("Shift+" .. name, function() b.anchor = b.anchor or b.pos; b.pos = to() end)
+        end
     end
     key("ANY_UNICODE", function(e) insert(e.key_text or "") end, true)
     key("SPACE", function() insert(" ") end)
     key("BS", function()
-        if b.sel then clear() elseif b.pos > 0 then table.remove(b.chars, b.pos); b.pos = b.pos - 1 end
+        if not cut() and b.pos > 0 then table.remove(b.chars, b.pos); b.pos = b.pos - 1 end
     end)
     key("DEL", function()
-        if b.sel then clear() elseif b.pos < #b.chars then table.remove(b.chars, b.pos + 1) end
+        if not cut() and b.pos < #b.chars then table.remove(b.chars, b.pos + 1) end
     end)
-    key("LEFT", function() b.sel = false; b.pos = math.max(0, b.pos - 1) end)
-    key("RIGHT", function() b.sel = false; b.pos = math.min(#b.chars, b.pos + 1) end)
-    key("HOME", function() b.sel = false; b.pos = 0 end)
-    key("END", function() b.sel = false; b.pos = #b.chars end)
-    key("Ctrl+a", function() b.sel = false; b.pos = 0 end)
-    key("Ctrl+e", function() b.sel = false; b.pos = #b.chars end)
+    go({"LEFT"}, function() return math.max(0, b.pos - 1) end, -1)
+    go({"RIGHT"}, function() return math.min(#b.chars, b.pos + 1) end, 1)
+    -- by word: Ctrl, and Alt as well (macOS can keep Ctrl+arrows for switching desktops)
+    go({"Ctrl+LEFT", "Alt+LEFT"}, function() return word(-1) end)
+    go({"Ctrl+RIGHT", "Alt+RIGHT"}, function() return word(1) end)
+    go({"UP", "HOME"}, function() return 0 end)
+    go({"DOWN", "END"}, function() return #b.chars end)
+    key("Ctrl+a", all)
+    key("Meta+a", all)
+    key("Ctrl+e", function() b.anchor, b.pos = nil, #b.chars end)
     key("Ctrl+u", clear)
-    key("Meta+a", function() b.sel = #b.chars > 0 end)
-    -- copy and cut take the whole note (selected or not), so a note moves between shots:
-    -- copy here, n on the other shot, paste
+    -- copy and cut take the selection, or the whole note when nothing is selected,
+    -- so a note moves between shots: copy here, n on the other shot, paste
     for _, k in ipairs({"Ctrl+c", "Meta+c"}) do
-        key(k, function() mp.set_property("clipboard/text", table.concat(b.chars)); osd("note copied", 1) end)
+        key(k, function()
+            local lo, hi = range()
+            mp.set_property("clipboard/text", lo and text_of(lo, hi) or table.concat(b.chars))
+            osd(lo and "copied" or "note copied", 1)
+        end)
     end
     for _, k in ipairs({"Ctrl+x", "Meta+x"}) do
-        key(k, function() mp.set_property("clipboard/text", table.concat(b.chars)); clear(); osd("note cut", 1) end)
+        key(k, function()
+            local lo, hi = range()
+            mp.set_property("clipboard/text", lo and text_of(lo, hi) or table.concat(b.chars))
+            if lo then cut() else clear() end
+            osd(lo and "cut" or "note cut", 1)
+        end)
     end
     for _, k in ipairs({"Ctrl+v", "Meta+v"}) do
         key(k, function() insert((mp.get_property("clipboard/text") or ""):gsub("[\r\n]+", " ")) end)
@@ -3170,19 +3286,28 @@ function notes.edit(shot, prefill, on_keep)
         end
         b.clicks[#b.clicks + 1] = now
         while #b.clicks > 3 do table.remove(b.clicks, 1) end
-        if #b.clicks == 3 and now - b.clicks[1] < 1.0 then b.sel = #b.chars > 0; b.clicks = {} end
+        if #b.clicks == 3 and now - b.clicks[1] < 1.0 then all(); b.clicks = {} end
         render(true)
+        notes.report()
     end
     -- the state row's click binding can be re-pushed above this one (when the
     -- controller hides), so it hands clicks to the box while the box is open
     B.box_click = click
     key("MBTN_LEFT", click)
     key("MBTN_LEFT_DBL", function() end)   -- not fullscreen
-    for _, k in ipairs({"UP", "DOWN", "WHEEL_UP", "WHEEL_DOWN", "TAB"}) do key(k, function() end) end
+    for _, k in ipairs({"WHEEL_UP", "WHEEL_DOWN", "TAB"}) do key(k, function() end) end
     key("ENTER", function() notes.close(true) end)
     key("KP_ENTER", function() notes.close(true) end)
     key("ESC", function() notes.close(false) end)
     render(true)
+    notes.report()
+end
+
+-- what the box holds, for other scripts and tests: false when it's closed
+function notes.report()
+    local b = notes.box
+    mp.set_property_native("user-data/shot_jump/note_box", b and
+        {text = table.concat(b.chars), pos = b.pos, anchor = b.anchor or -1, lines = B.note_lines or 1} or false)
 end
 
 -- Imported notes ---------------------------------------------------------------
@@ -3570,8 +3695,7 @@ review_buttons = function(shot)
     end
     local b = notes.box
     if b and b.num == shot.num then
-        list.box = {num = b.num, before = table.concat(b.chars, "", 1, b.pos),
-                    after = table.concat(b.chars, "", b.pos + 1, #b.chars), len = #b.chars, sel = b.sel}
+        list.box = {num = b.num, chars = b.chars, pos = b.pos, anchor = b.anchor}
     end
     for _, m in ipairs(MARKS) do
         list[#list + 1] = {name = m.name, text = m.label, color = m.color, star = m.star, lit = cur == m.name}
