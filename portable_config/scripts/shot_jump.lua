@@ -1306,8 +1306,35 @@ function slack.target(s)
     return math.max(0, s.t - slack.frame())
 end
 
+-- A shot whose take was switched loops on its own: Space plays it over and over
+-- (mpv's A-B loop, over the shot's frames). Moving to another shot lets the
+-- timeline run on again. slack.loop = {xml, idx} of that shot, or nil
+function slack.set_loop(s)
+    if s then
+        local half = 0.5 / ((state.fps and state.fps > 0) and state.fps or 24)
+        mp.set_property_number("ab-loop-a", s.t)
+        mp.set_property_number("ab-loop-b", s.t + math.max(s.len - half, half))
+    else
+        mp.set_property("ab-loop-a", "no")
+        mp.set_property("ab-loop-b", "no")
+    end
+end
+function slack.unloop()
+    if not slack.loop then return end
+    slack.loop = nil
+    slack.set_loop(nil)
+end
+-- each load of the XML (a take swap reloads it): loop that shot again, if it's still there
+mp.register_event("file-loaded", function()
+    local lp, asm = slack.loop, state.assembly
+    if not lp then return end
+    local s = asm and asm.xml == lp.xml and asm.shots[lp.idx]
+    if s then slack.set_loop(s) else slack.unloop() end
+end)
+
 local function jump_to(i)
     local s = state.shots[i]
+    if slack.loop and slack.loop.idx ~= i then slack.unloop() end   -- another shot: the timeline runs on
     -- an assembly stops on the shot, so Up / Down and the marks act on the shot
     -- on screen instead of wherever playback has rolled on to
     if state.assembly then mp.set_property_bool("pause", true) end
@@ -1954,7 +1981,14 @@ local function render(force)
     if update_hover then update_hover(mp.get_property_native("mouse-pos")) end
 end
 
-mp.observe_property("time-pos", "number", function() render() end)
+mp.observe_property("time-pos", "number", function()
+    -- the looping shot was left some other way (a click on the seek bar): the timeline runs on
+    if slack.loop and state.assembly then
+        local i = current_shot_index()
+        if i and i ~= slack.loop.idx then slack.unloop() end
+    end
+    render()
+end)
 mp.observe_property("osd-dimensions", "native", function() render(true) end)
 mp.observe_property("pause", "bool", function() render() end)
 mp.register_event("end-file", clear_overlay)
@@ -2319,6 +2353,7 @@ local function version_step(dir)
     end
     local f = list[k]
     browse = {idx = shot.idx, path = f.path}
+    slack.loop = {xml = asm.xml, idx = shot.idx}   -- a switched take: this shot loops from now on
     -- stepping onto a version is seeing it, even when the keys go faster than it
     -- can be drawn (held down, or pressed quickly)
     if B.mark_seen then B.mark_seen(shot, f.path) end
