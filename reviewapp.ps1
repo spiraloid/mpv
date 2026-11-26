@@ -1,18 +1,20 @@
 # reviewapp.ps1 — one-click shortcut that opens a review XML in mpv (the Windows twin of reviewapp.sh)
-# Usage: powershell -ExecutionPolicy Bypass -File reviewapp.ps1 "D:\path\to\review.xml" ["App Name"] [-Mpv "C:\path\to\mpv.exe"] [-Preview]
+# Usage: powershell -ExecutionPolicy Bypass -File reviewapp.ps1 "D:\path\to\review.xml" ["App Name"] [-Mpv "C:\path\to\mpv.exe"] [-Edit]
 #
 # Puts the shortcut in the Start menu (right-click it there: Pin to taskbar) and on the Desktop.
 # mpv.exe: -Mpv, else the one beside this script (portable, with portable_config beside it),
 # else the one on PATH (winget). The paths are written into the shortcut, so each PC makes its own.
-# -Preview: the shortcut opens it look only (step through versions; no states, notes or Save,
-# and no XML or video written). Run it again without -Preview to undo; it replaces the shortcut.
+# The shortcut opens it look only (step through versions; no states, notes or Save, and no XML or
+# video written). -Edit makes an editor's shortcut instead. Running it again replaces the shortcut.
 
 param(
     [Parameter(Mandatory = $true, Position = 0)][string]$Xml,
     [Parameter(Position = 1)][string]$Name,
     [string]$Mpv,
-    [switch]$Preview
+    [switch]$Edit,
+    [switch]$Preview   # the default; still accepted
 )
+$Preview = -not $Edit
 $ErrorActionPreference = "Stop"
 
 if (-not (Test-Path -LiteralPath $Xml -PathType Leaf)) { Write-Host "Error: '$Xml' not found" -ForegroundColor Red; exit 1 }
@@ -49,5 +51,5 @@ foreach ($dir in $places) {
     $lnk.Save()
     Write-Host "Made $(Join-Path $dir $file)"
 }
-Write-Host ("Opens: $Xml" + $(if ($Preview) { "  (look only)" } else { "" }))
+Write-Host ("Opens: $Xml" + $(if ($Preview) { "  (look only; -Edit for an editor's shortcut)" } else { "  (to edit)" }))
 Write-Host "To pin it: Start menu, right-click '$Name', Pin to taskbar." -ForegroundColor Green

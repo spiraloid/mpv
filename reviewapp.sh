@@ -1,5 +1,5 @@
 #!/bin/bash
-# Usage: ./reviewapp.sh [--preview] <path/to/review.xml> ["App Name"]
+# Usage: ./reviewapp.sh [--edit] <path/to/review.xml> ["App Name"]
 #
 # Makes a one-click app that opens that review XML in this folder's mpv.app
 # (portable_config and its scripts included). Drag it onto the Dock.
@@ -7,15 +7,18 @@
 # - Lands in ~/Applications (DEST=<folder> puts it somewhere else)
 # - Default name: "<the XML's folder> Review"
 # - The paths are written into the app, so each Mac makes its own
-# - --preview: the app opens it look only (step through versions; no states,
-#   notes or Save, and no XML or video written). Run it again without
-#   --preview to undo; running it again replaces the app either way
+# - The app opens it look only (step through versions; no states, notes or
+#   Save, and no XML or video written). --edit makes an editor's app instead.
+#   Running it again replaces the app, so it switches either way
 
 set -euo pipefail
 
-PREVIEW=no
-[[ "${1:-}" == "--preview" ]] && { PREVIEW=yes; shift; }
-[[ $# -lt 1 ]] && { echo "Usage: ./reviewapp.sh [--preview] <path/to/review.xml> [\"App Name\"]"; exit 1; }
+PREVIEW=yes
+case "${1:-}" in
+    --edit)    PREVIEW=no; shift ;;
+    --preview) shift ;;   # the default; still accepted
+esac
+[[ $# -lt 1 ]] && { echo "Usage: ./reviewapp.sh [--edit] <path/to/review.xml> [\"App Name\"]"; exit 1; }
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MPV="$DIR/mpv.app"
@@ -76,5 +79,5 @@ codesign --force --deep --sign - "$APP"
 "$LSREGISTER" -f "$APP"
 
 echo "✓ $APP"
-echo "  Opens: $XML$([[ $PREVIEW == yes ]] && echo "  (look only)")"
+echo "  Opens: $XML  ($([[ $PREVIEW == yes ]] && echo "look only; --edit for an editor's app" || echo "to edit"))"
 echo "  Drag it onto the Dock."
