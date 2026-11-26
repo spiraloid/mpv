@@ -598,7 +598,7 @@ local HELP = {
     {"SHOTS   an XML, or a video with known cuts"},
     {"Left / Right", "Previous / next shot, on its first frame   (an XML pauses there)"},
     {"Wheel", "XML: previous / next shot"},
-    {"o", "Show / hide the shot label and buttons"},
+    {"o   ·   Shift + a", "Show / hide the shot label and buttons   ·   sound: as the .mp4 / the source"},
     {"REVIEW   the review XML; pause to see the state row"},
     {"Up / Down", "The shot's history: Up older (to the plate), Down newer (to the final)"},
     {"r / c / a   ·   m", "Shot state: re-roll / re-circulate / final  (again: clear)   ·   comp on / off"},

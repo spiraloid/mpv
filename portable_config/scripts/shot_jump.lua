@@ -339,6 +339,10 @@ local browse                -- last Up / Down swap {idx, path}, until it has loa
 local picks = {}            -- xml -> {shot number -> file}: Up / Down choices, held in memory
 local reviews = {}          -- xml -> a review session: marks and what to save (see "review")
 local export = {dirty = false}  -- assembly changed this session: render it on exit
+-- What an assembly plays: the render's own sound (export_audio_clip) as the .mp4
+-- has it, or the XML's first audio track ("source"). A switches; it holds for the session
+export.listen = "export"
+export.sound_title = "export sound"
 -- Everything this mpv session did on disk, so "No" on exit can put it back:
 -- snap[xml] = the XML's text (and whether a .bak existed) when first opened;
 -- journal = moves {from, to} and created files {create}, in order.
@@ -652,21 +656,30 @@ local function build_assembly(xml_path, seq)
         export_sound.enabled = true
         msg.info("render sound: " .. export_sound.path)
     end
-    for _, c in ipairs(audio) do
+    local function seg(c, force)
         local len = (c.out and c["in"]) and (c.out - c["in"]) / c.fps or 0
-        if len > 0 and c.path and exists(c.path) and c.enabled then
-            asegs[#asegs + 1] = q(c.path) .. ",start=" .. num((c["in"] or 0) / c.fps) .. ",length=" .. num(len)
+        if len > 0 and c.path and exists(c.path) and (c.enabled or force) then
+            return q(c.path) .. ",start=" .. num((c["in"] or 0) / c.fps) .. ",length=" .. num(len)
         end
     end
+    for _, c in ipairs(audio) do asegs[#asegs + 1] = seg(c) end
     local edl = "edl://" .. table.concat(segs, ";")
     if #asegs > 0 then
         soundtrack = true
         edl = edl .. ";!new_stream;!track_meta,title=" .. q(SOUNDTRACK_TITLE) .. ";" .. table.concat(asegs, ";")
     end
+    -- playing: the render's sound rides along as a second stream, so A can switch to it
+    local esg = not encoding and export_sound and seg(export_sound, true)
+    if esg then
+        soundtrack = true
+        edl = edl .. ";!new_stream;!track_meta,title=" .. q(export.sound_title) .. ";" .. esg
+    end
     return {
         xml = xml_path, seq = seq, edl = edl, shots = shots, blank = blank,
         soundtrack = soundtrack, missing = missing, retired = retired, fps = seq.fps,
         export_sound = export_sound ~= nil,
+        export_name = export_sound and name_of(export_sound.path) or nil,
+        source_name = seq.audio[1] and seq.audio[1].path and name_of(seq.audio[1].path) or nil,
         review_layout = review_layout,
     }
 end
@@ -1231,14 +1244,32 @@ local function is_real_video()
 end
 
 local function select_soundtrack()
+    local src, exp
     for _, t in ipairs(mp.get_property_native("track-list") or {}) do
-        if t.type == "audio" and t.title == SOUNDTRACK_TITLE then
-            export.channels = t["demux-channel-count"]
-            mp.set_property_number("aid", t.id)
-            return
-        end
+        if t.type == "audio" and t.title == SOUNDTRACK_TITLE then src = t end
+        if t.type == "audio" and t.title == export.sound_title then exp = t end
     end
+    if src then export.channels = src["demux-channel-count"] end
+    local pick = (export.listen == "export" and exp) or src or exp
+    if pick then mp.set_property_number("aid", pick.id) end
+    return src, exp, pick
 end
+
+-- A: hear the render's sound (as the .mp4 has it) or the XML's first audio track
+mp.add_key_binding("A", "audio_source", function()
+    if not state.assembly then osd("A switches the sound of an XML assembly", 1.5); return end
+    local src, exp = select_soundtrack()
+    if not (src and exp) then
+        osd(exp and "sound: the export's (the XML has no other audio track)"
+                or "sound: the XML's audio track (no export sound to switch to)", 2)
+        return
+    end
+    export.listen = export.listen == "export" and "source" or "export"
+    local _, _, pick = select_soundtrack()
+    osd("sound: " .. (export.listen == "export" and "as the .mp4 (" or "source (") ..
+        tostring(pick.title == export.sound_title and (state.assembly.export_name or "export audio")
+                 or (state.assembly.source_name or "audio track 1")) .. ")", 2)
+end)
 
 mp.register_event("file-loaded", function()
     local path = mp.get_property("path")
