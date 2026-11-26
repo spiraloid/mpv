@@ -2349,6 +2349,18 @@ local function save_frame()
     local n = math.floor(shot.len * asm.fps + 0.5)
     local which = f <= 0 and "start" or (f >= n - 1 and "end" or nil)
     if not which then return plain() end
+    if o.preview then   -- look only: beside the XML (as the plain snapshot is), never into the frames rung
+        local base, out = ri.num .. "_" .. which, nil
+        for i = 1, 999 do
+            local name = base .. (i == 1 and "" or ("_" .. i)) .. ".png"
+            out = utils.join_path(dir_of(asm.xml), name)
+            if not exists(out) then break end
+        end
+        mp.commandv("screenshot-to-file", out, "video")
+        if exists(out) then osd("saved " .. name_of(out) .. " beside " .. name_of(asm.xml), 2.5)
+        else osd("could not save " .. name_of(out), 3) end
+        return
+    end
     local sdir, cdir = native_seps(ri.shots), nil
     for _, d in ipairs(utils.readdir(sdir, "dirs") or {}) do
         if d:match("^C_") then cdir = utils.join_path(sdir, d) end
