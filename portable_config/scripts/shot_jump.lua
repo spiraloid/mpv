@@ -1785,15 +1785,11 @@ local function row_events(events, list, vx0, vy0, vw, k)
             "{\\an7\\pos(0,0)\\p1\\bord%.2f\\shad0\\1c&H43A02E&\\1a&H28&\\3c&H000000&\\3a&H80&}m %.1f %.1f l %.1f %.1f %.1f %.1f %.1f %.1f{\\p0}",
             1.5 * k, x0, y0, x1, y0, x1, y1, x0, y1)
         tick(x0 + 18 * k, cy - 15 * k, 30 * k, "FFFFFF")
-        local text = "{\\b1}SELECT  " .. ass_text(list.mode.label) .. "{\\b0}"
-        if #list.mode.parts > 0 then
-            text = text .. "      " .. ass_text(table.concat(list.mode.parts, "     ·     "))
-        else
-            text = text .. "      {\\1c&HD8F0D8&}d driver (Shift+D: depth)  ·  s / e start / end frame, from any shot and take"
-        end
+        local head = "SELECT  " .. list.mode.label
         events[#events + 1] = string.format(
-            "{\\an4\\pos(%.1f,%.1f)\\bord%.2f\\shad0\\q2\\3c&H000000&\\3a&H70&\\1c&HFFFFFF&\\1a&H00&\\fs%.1f}%s",
-            x0 + 60 * k, cy, 1.5 * k, 26 * k, text)
+            "{\\an4\\pos(%.1f,%.1f)\\bord%.2f\\shad0\\b1\\q2\\3c&H000000&\\3a&H70&\\1c&HFFFFFF&\\1a&H00&\\fs%.1f}%s",
+            x0 + 60 * k, cy, 1.5 * k, 26 * k, ass_text(head))
+        local boxes_x = x0 + 60 * k + math.max(B.text_w(head, 26 * k) * 1.08 + 36 * k, 300 * k)
         -- X (cancel, as Esc) at the far right, Apply before it. Each takes a tall
         -- hit area, from the top of the picture to under the bar, so a click near it lands
         local xs = 56 * k
@@ -1815,25 +1811,33 @@ local function row_events(events, list, vx0, vy0, vw, k)
         events[#events + 1] = string.format(
             "{\\an7\\pos(0,0)\\p1\\bord%.2f\\shad0\\1a&HFF&\\3c&HFFFFFF&\\3a&H00&}m %.1f %.1f l %.1f %.1f m %.1f %.1f l %.1f %.1f{\\p0}",
             2.2 * k, xc - r, cy - r, xc + r, cy + r, xc + r, cy - r, xc - r, cy + r)
-        local hx = ax0 - 16 * k   -- where the hint ends: the depth switch goes before it
-        if list.mode.driver then   -- a pinned driver: [x] depth, a click (or Shift+D) flips it
-            local dw = 150 * k
-            local dx0 = ax0 - 14 * k - dw
-            local on, ss = list.mode.driver == "depth", 24 * k
-            local sx, sy = dx0 + 14 * k, cy - ss / 2
+        -- the four inputs: a box each, ticked when set, the take (and frame) under its name.
+        -- A click pins what's on screen; on what's already pinned, it unpins
+        local checks = list.mode.checks or {}
+        local sw = (ax0 - 20 * k - boxes_x) / math.max(1, #checks)
+        for n, c in ipairs(checks) do
+            local sx0 = boxes_x + (n - 1) * sw
+            local ss = 24 * k
+            local bx, by = sx0 + 6 * k, cy - ss / 2 - (c.sub and 9 * k or 0)
+            local hot = hovered == c.name
             events[#events + 1] = string.format(
                 "{\\an7\\pos(0,0)\\p1\\bord%.2f\\shad0\\1c&HFFFFFF&\\1a&H%s&\\3c&HFFFFFF&\\3a&H00&}m %.1f %.1f l %.1f %.1f %.1f %.1f %.1f %.1f{\\p0}",
-                1.5 * k, on and "00" or "FF", sx, sy, sx + ss, sy, sx + ss, sy + ss, sx, sy + ss)
-            if on then tick(sx, sy, ss, "2A7A1E") end
+                (hot and 2.2 or 1.5) * k, c.on and "00" or "FF", bx, by, bx + ss, by, bx + ss, by + ss, bx, by + ss)
+            if c.on then tick(bx, by, ss, "2A7A1E") end
             events[#events + 1] = string.format(
-                "{\\an4\\pos(%.1f,%.1f)\\bord0\\shad0\\b1\\q2\\1c&H%s&\\1a&H00&\\fs%.1f}depth",
-                sx + ss + 10 * k, cy, hovered == "depth" and "FFFFFF" or "D8F0D8", 26 * k)
-            buttons[#buttons + 1] = {name = "depth", x0 = dx0, y0 = vy0, x1 = ax0 - 7 * k, y1 = y1 + 22 * k, enabled = true}
-            hx = dx0 - 8 * k
+                "{\\an4\\pos(%.1f,%.1f)\\bord0\\shad0\\b1\\q2\\1c&H%s&\\1a&H00&\\fs%.1f}%s",
+                bx + ss + 10 * k, by + ss / 2, (hot or c.on) and "FFFFFF" or "D8F0D8", 23 * k, c.title)
+            if c.sub then   -- what's pinned: cut to the slot
+                local t = c.sub
+                local room = sw - 16 * k
+                while #t > 4 and B.text_w(t, 17 * k) > room do t = t:sub(1, #t - 2) end
+                if t ~= c.sub then t = t .. "…" end
+                events[#events + 1] = string.format(
+                    "{\\an4\\pos(%.1f,%.1f)\\bord0\\shad0\\q2\\1c&HE8F8E8&\\1a&H00&\\fs%.1f}%s",
+                    sx0 + 6 * k, by + ss + 14 * k, 17 * k, ass_text(t))
+            end
+            buttons[#buttons + 1] = {name = c.name, x0 = sx0, y0 = vy0, x1 = sx0 + sw, y1 = y1 + 22 * k, enabled = true}
         end
-        events[#events + 1] = string.format(
-            "{\\an6\\pos(%.1f,%.1f)\\bord0\\shad0\\q2\\1c&HD8F0D8&\\1a&H00&\\fs%.1f}Enter applies  ·  Esc cancels",
-            hx, cy, 20 * k)
         local hy0, hy1 = vy0, y1 + 22 * k
         buttons[#buttons + 1] = {name = "apply", x0 = ax0 - 7 * k, y0 = hy0, x1 = (ax1 + xx0) / 2, y1 = hy1, enabled = true}
         buttons[#buttons + 1] = {name = "cancel", x0 = (ax1 + xx0) / 2, y0 = hy0, x1 = vx0 + vw, y1 = hy1, enabled = true}
@@ -3276,7 +3280,7 @@ local function read_selects(r)
                         if type(v) == "table" and type(v.file) == "string" then
                             inputs = inputs or {}
                             inputs[k] = {file = v.file, frame = tonumber(v.frame),
-                                         kind = v.kind == "depth" and "depth" or nil,
+                                         kind = type(v.kind) == "string" and v.kind or nil,
                                          png = type(v.png) == "string" and v.png or nil,
                                          note = type(v.note) == "string" and v.note or nil}
                         end
@@ -3316,7 +3320,7 @@ function session.inputs_json(t)
         local v = t[k]
         if type(v) == "table" and v.file then
             local f = {'"file": ' .. json_str(v.file)}
-            if v.kind == "depth" then f[#f + 1] = '"kind": "depth"' end   -- footage when left out
+            if v.kind then f[#f + 1] = '"kind": ' .. json_str(v.kind) end   -- "mask" or "depth"; an old save's driver without it is footage
             if v.frame then f[#f + 1] = '"frame": ' .. string.format("%d", v.frame) end
             if v.png then f[#f + 1] = '"png": ' .. json_str(v.png) end
             if v.note and v.note ~= "" then f[#f + 1] = '"note": ' .. json_str(v.note) end
@@ -3529,6 +3533,7 @@ function notes.recirc_default(r)
         local j = text and utils.parse_json(text)
         notes.defaults = type(j) == "table" and type(j.recirculate_note) == "string" and j.recirculate_note ~= ""
                          and j.recirculate_note or nil
+        notes.conflicts = type(j) == "table" and type(j.input_conflicts) == "table" and j.input_conflicts or nil
         notes.defaults_t = now
     end
     return notes.defaults
@@ -4178,14 +4183,27 @@ review_buttons = function(shot)
         end
         local parts = {}
         if ins.driver then
-            parts[#parts + 1] = (ins.driver.kind == "depth" and "depth driver " or "driver ") .. lab(ins.driver) ..
+            parts[#parts + 1] = (ins.driver.kind or "footage") .. " driver " .. lab(ins.driver) ..
                 ((ins.driver.note or "") ~= "" and ("  \"" .. ins.driver.note .. "\"") or "")
         end
         for _, k in ipairs({"start", "end"}) do
             if ins[k] then parts[#parts + 1] = k .. " " .. lab(ins[k]) .. " f" .. tostring(ins[k].frame or "?") end
         end
-        local list = {row = true, mode = {label = m.label, parts = parts,
-                                          driver = ins.driver and (ins.driver.kind == "depth" and "depth" or "footage") or nil}}
+        local dk = ins.driver and (ins.driver.kind or "footage")
+        local function sub(v, frames)
+            if not v then return nil end
+            local t = lab(v) .. (frames and (" f" .. tostring(v.frame or "?")) or "")
+            if not frames and (v.note or "") ~= "" then t = t .. "  \"" .. v.note .. "\"" end
+            return t
+        end
+        local checks = {
+            {name = "pin_depth", title = "depth driver", on = dk == "depth", sub = dk == "depth" and sub(ins.driver) or nil},
+            {name = "pin_mask", title = "mask driver", on = dk == "mask" or dk == "footage",
+             sub = (dk == "mask" or dk == "footage") and ((dk == "footage" and "footage: " or "") .. sub(ins.driver)) or nil},
+            {name = "pin_start", title = "start frame", on = ins.start ~= nil, sub = sub(ins.start, true)},
+            {name = "pin_end", title = "end frame", on = ins["end"] ~= nil, sub = sub(ins["end"], true)},
+        }
+        local list = {row = true, mode = {label = m.label, parts = parts, checks = checks}}
         local b = notes.box
         if b then list.box = {num = b.num, chars = b.chars, pos = b.pos, anchor = b.anchor, title = b.title} end
         return list
@@ -4230,7 +4248,7 @@ review_buttons = function(shot)
             end
             list.inputs = {}
             if ins.driver then
-                list.inputs[#list.inputs + 1] = (ins.driver.kind == "depth" and "depth driver  " or "footage driver  ") .. lab(ins.driver)
+                list.inputs[#list.inputs + 1] = (ins.driver.kind or "footage") .. " driver  " .. lab(ins.driver)
             end
             local fr = {}
             for _, k in ipairs({"start", "end"}) do
@@ -4314,7 +4332,8 @@ end
 review_click = function(name)   -- a click on the row, or on the green bar's Apply
     if name == "apply" then return notes.mode_apply() end
     if name == "cancel" then return notes.mode_cancel() end
-    if name == "depth" then return notes.driver_kind() end
+    local pin = name:match("^pin_(%a+)$")
+    if pin then return notes.pin(pin) end
     return set_mark(name)
 end
 
@@ -4436,8 +4455,8 @@ function notes.mode_target(m)
 end
 
 function notes.mode_keys(on)
-    local list = {{"d", "driver", function() notes.pin("driver") end},
-                  {"D", "driver_kind", function() notes.driver_kind() end},
+    local list = {{"d", "driver", function() notes.pin("mask") end},
+                  {"D", "driver_depth", function() notes.pin("depth") end},
                   {"s", "start", function() notes.pin("start") end},
                   {"e", "end", function() notes.pin("end") end},
                   {"ENTER", "apply", function() notes.mode_apply() end},
@@ -4474,7 +4493,7 @@ function notes.select_enter()
     notes.mode = {r = r, num = num, idx = shot.idx, file = file,
                   label = rung_label(rung_info(file), shot.num_text), before = before}
     notes.mode_keys(true)
-    osd("select mode for " .. notes.mode.label .. ":  d driver  ·  s / e start / end frame  ·  Enter applies  ·  Esc cancels", 4)
+    osd("select mode for " .. notes.mode.label .. ":  click a box (or d mask / Shift+D depth / s / e) to pin what's on screen  ·  Enter applies  ·  Esc cancels", 4)
     render(true)
 end
 
@@ -4503,53 +4522,101 @@ end
 
 -- Shift+D in select mode: the pinned driver as footage (the take itself) or as
 -- depth (a depth video made from it); footage when "kind" is left out
+-- The driver's kind: "mask" (the take's matte as the red key figure over the
+-- plate) or "depth" (a depth video made from the take). Shift+D / Tab flip it
 function notes.driver_kind()
     local m = notes.mode
     if not m then return end
     local ins = notes.inputs_of(m.r, m.num)
     if not ins or not ins.driver then osd("no driver pinned yet: d pins the take on screen", 2); return end
-    local t = {}
-    for k, v in pairs(ins) do t[k] = v end
-    local d = {}
-    for k, v in pairs(ins.driver) do d[k] = v end
-    d.kind = d.kind ~= "depth" and "depth" or nil
-    t.driver = d
-    m.r.inputs[m.num] = t
-    notes.touch(m.r, m.num)
-    m.r.touched[m.num] = true
-    osd("driver for " .. m.num .. ": " .. (d.kind == "depth" and "depth" or "footage"), 2)
-    render(true)
+    notes.pin(ins.driver.kind == "depth" and "mask" or "depth", true)
 end
 
--- d / s / e in select mode: the take on screen (any shot) as the select's driver,
--- the frame on screen as its start / end frame. The same again unpins it.
-function notes.pin(kind)
+-- Inputs the model can't take together: turning one on turns the others off.
+-- The project's defaults file can say ({"input_conflicts": {"depth": ["start"]}},
+-- either way round); without it a depth driver and a start frame exclude each
+-- other. The mask and depth drivers always do: there's one driver.
+function notes.conflicts_of(r, kind)
+    notes.recirc_default(r)   -- reads the defaults file (and its conflicts) if it's due
+    local table_ = notes.conflicts or {depth = {"start"}}
+    local out = {}
+    for a, list in pairs(table_) do
+        if type(list) == "table" then
+            for _, b in ipairs(list) do
+                if a == kind then out[b] = true elseif b == kind then out[a] = true end
+            end
+        end
+    end
+    return out
+end
+
+-- In select mode, from the keys or the bar's boxes: the take on screen (any
+-- shot) as the select's mask / depth driver, the frame on screen as its start /
+-- end frame. On a box that's set for the take (or frame) on screen it unpins;
+-- set for another one, it moves to this one. kind_only: switch the pinned
+-- driver's kind, whichever take it is
+function notes.pin(kind, kind_only)
+    if kind == "driver" then kind = "mask" end
     local m, r, shot, asm = notes.mode, current_review(), current_shot(), state.assembly
     if not m or r ~= m.r or not asm then return end
-    if not shot or not shot.rung or shot.missing or shot.retired then osd("nothing to pin here", 1.5); return end
-    local file = rel_file(r, shot.file or shot.play)
-    if not file then osd("this take is outside the review's folder", 2); return end
     local ins = {}
     for k, v in pairs(notes.inputs_of(r, m.num) or {}) do ins[k] = v end
-    local what = rung_label(rung_info(shot.file or shot.play), shot.num_text)
     local function set(t)
         r.inputs[m.num] = next(t) and t or false
         notes.touch(r, m.num)
         r.touched[m.num], r.cleared[m.num] = true, nil
         render(true)
     end
-    if kind == "driver" then
-        if ins.driver and ins.driver.file == file then
-            ins.driver = nil; set(ins); osd("driver unpinned", 1.5); return
+    local function clear_conflicts(t, k)   -- k is turning on: what it can't go with goes off
+        local off = {}
+        for c in pairs(notes.conflicts_of(r, k)) do
+            if (c == "start" or c == "end") and t[c] then t[c] = nil; off[#off + 1] = c .. " frame" end
+            if (c == "mask" or c == "depth") and t.driver and (t.driver.kind or "footage") == c then
+                t.driver = nil; off[#off + 1] = c .. " driver"
+            end
         end
-        ins.driver = {file = file, note = ""}
+        return #off > 0 and ("   (off: " .. table.concat(off, ", ") .. ")") or ""
+    end
+    local function as(d, k)   -- a copy of the driver as kind k
+        local c = {}
+        for kk, vv in pairs(d) do c[kk] = vv end
+        c.kind = k
+        return c
+    end
+    if kind_only then
+        if ins.driver then
+            ins.driver = as(ins.driver, kind)
+            local off = clear_conflicts(ins, kind)
+            set(ins); osd("driver for " .. m.num .. ": " .. kind .. off, 2)
+        end
+        return
+    end
+    if not shot or not shot.rung or shot.missing or shot.retired then osd("nothing to pin here", 1.5); return end
+    local file = rel_file(r, shot.file or shot.play)
+    if not file then osd("this take is outside the review's folder", 2); return end
+    local what = rung_label(rung_info(shot.file or shot.play), shot.num_text)
+    if kind == "mask" or kind == "depth" then
+        local cur = ins.driver
+        if cur and cur.file == file then
+            if (cur.kind or "footage") == kind then ins.driver = nil; set(ins); osd(kind .. " driver unpinned", 1.5); return end
+            ins.driver = as(cur, kind)
+            local off = clear_conflicts(ins, kind)
+            set(ins); osd(kind .. " driver for " .. m.num .. ": " .. what .. off, 2); return
+        end
+        ins.driver = {file = file, kind = kind, note = ""}
+        local off = clear_conflicts(ins, kind)
         set(ins)
         local target = notes.mode_target(m)
         local fps = asm.fps or 24
         local want, have = target and math.floor(target.len * fps + 0.5), math.floor(shot.len * fps + 0.5)
         local warn = (target and target ~= shot and want ~= have)
             and string.format("   (driver is %d frames, %s is %d: the run needs them equal)", have, m.num, want) or ""
-        osd("driver for " .. m.num .. ": " .. what .. warn, 4)
+        osd(kind .. " driver for " .. m.num .. ": " .. what .. warn .. off, 4)
+        local function title()
+            local now = notes.inputs_of(r, m.num)
+            local k = now and now.driver and now.driver.kind or kind
+            return "Driver for " .. m.num .. ", " .. k .. "  (Tab: " .. (k == "depth" and "mask" or "depth") .. ")"
+        end
         notes.edit(shot, "", function(text)
             local now = notes.inputs_of(r, m.num)
             if now and now.driver and now.driver.file == file then
@@ -4558,15 +4625,10 @@ function notes.pin(kind)
                 t.driver = {file = file, note = text, kind = now.driver.kind}
                 set(t)
             end
-        end, "Driver for " .. m.num .. ", footage  (Tab: depth)")
+        end, title())
         -- the box takes every key, Shift+D included: Tab flips the kind from inside it
         if notes.box then
-            notes.box.on_tab = function(bx)
-                notes.driver_kind()
-                local now = notes.inputs_of(r, m.num)
-                local depth = now and now.driver and now.driver.kind == "depth"
-                bx.title = "Driver for " .. m.num .. (depth and ", depth  (Tab: footage)" or ", footage  (Tab: depth)")
-            end
+            notes.box.on_tab = function(bx) notes.driver_kind(); bx.title = title() end
         end
         return
     end
@@ -4586,8 +4648,9 @@ function notes.pin(kind)
     mp.commandv("screenshot-to-file", grab, "video")
     if not exists(grab) then osd("could not grab the frame", 3); return end
     ins[kind] = {file = file, frame = frame, grab = grab}
+    local off = clear_conflicts(ins, kind)
     set(ins)
-    osd(string.format("%s frame for %s: %s, frame %d", kind, m.num, what, frame), 3)
+    osd(string.format("%s frame for %s: %s, frame %d%s", kind, m.num, what, frame, off), 3)
 end
 
 -- saving -----------------------------------------------------------------------

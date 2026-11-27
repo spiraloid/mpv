@@ -601,7 +601,7 @@ local HELP = {
     {"o   ·   Shift + a", "Show / hide the shot label and buttons   ·   sound: as the .mp4 / the source"},
     {"REVIEW   the review XML; pause to see the state row"},
     {"Up / Down  ·  with Shift", "Look at the shot's takes: Up newer, Down older   ·   Shift: the select / the earliest"},
-    {"Enter, then d / s / e", "Make the take the select   ·   pin driver / start / end frames from any take"},
+    {"Enter, then the boxes", "Make the take the select   ·   pin depth / mask driver, start / end frame from any take"},
     {"r / c / a   ·   m", "Shot state: re-roll / re-circulate / final  (again: clear)   ·   comp on / off"},
     {"n   ·   x", "Edit the select's note (re-roll, re-circulate open it)   ·   clear the shot's choice"},
     {"in the note box", "Click, drag, double click: cursor, select, word  ·  Shift / Ctrl + arrows"},
