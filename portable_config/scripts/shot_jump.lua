@@ -2025,11 +2025,11 @@ local function row_events(events, list, vx0, vy0, vw, k)
                 rect("40C0FF", "00", cx - k, cy - fs * 0.55, cx + k, cy + fs * 0.55)
             end
         end
-        events[#events + 1] = string.format(
+        if not bx.title then events[#events + 1] = string.format(   -- the driver's box goes without the tips
             "{\\an8\\pos(%.1f,%.1f)\\bord%.2f\\shad0\\q2\\3c&H000000&\\3a&H50&\\1c&HB0B0B0&\\1a&H00&\\fs%.1f}%s",
             vx0 + vw / 2, y0 + bh + 6 * k, 1.5 * k, 20 * k,
             lo < hi and "selected  ·  type to replace  ·  Cmd/Ctrl+C copies  ·  Cmd/Ctrl+X cuts"
-            or "Enter saves the note  ·  Esc leaves it as it was  ·  Shift+arrows select  ·  Cmd/Ctrl+C X V copy, cut, paste")
+            or "Enter saves the note  ·  Esc leaves it as it was  ·  Shift+arrows select  ·  Cmd/Ctrl+C X V copy, cut, paste") end
         return
     end
     if list.note_hint and not list.box then   -- a re-circulate with no note: the project's default, dim
@@ -2283,6 +2283,14 @@ function drag.pointer()
     return {x = (v[1] - v[3]) * d.w / v[5], y = (v[2] - v[4]) * d.h / v[6], hover = true}
 end
 
+-- Where a click is: mpv's own idea of the pointer when that lands on something
+-- (instant), else ask macOS (drag.pointer, a few tenths of a second)
+function drag.pointer_on(hits)
+    local m = mp.get_property_native("mouse-pos")
+    if m and m.hover and hits(m) then return m end
+    return drag.pointer()
+end
+
 local click_bound = false
 local function set_click_binding(on)
     if on == click_bound then return end
@@ -2291,10 +2299,14 @@ local function set_click_binding(on)
         mp.add_forced_key_binding("MBTN_LEFT", "shot_button_click", function(e)
             if B.box_click then return B.box_click(e) end   -- the note box is open: it takes the click
             if e.event ~= "down" and e.event ~= "press" then return end
-            local p, h = drag.pointer(), nil   -- where the pointer really is now
-            for _, bt in ipairs(buttons) do
-                if bt.enabled and p and p.x >= bt.x0 and p.x <= bt.x1 and p.y >= bt.y0 and p.y <= bt.y1 then h = bt.name end
+            local function on(p)
+                local h
+                for _, bt in ipairs(buttons) do
+                    if bt.enabled and p and p.x >= bt.x0 and p.x <= bt.x1 and p.y >= bt.y0 and p.y <= bt.y1 then h = bt.name end
+                end
+                return h
             end
+            local h = on(drag.pointer_on(on))   -- where the pointer really is now
             if h == "restore" then restore()
             elseif h == "reject" then retire()
             elseif h and review_click then review_click(h) end
@@ -3038,8 +3050,9 @@ local function open_modal(spec)
         end
     end
     local function click()
-        local m = drag.pointer()
         local c = modal.check_rect
+        local function on_check_(p) return c and p and p.x >= c[1] and p.x <= c[3] and p.y >= c[2] and p.y <= c[4] end
+        local m = drag.pointer_on(function(p) return over(p) or on_check_(p) end)
         local i = over(m)
         local on_check = not i and c and m and m.x >= c[1] and m.x <= c[3] and m.y >= c[2] and m.y <= c[4]
         modal.log_click(m, i and spec.choices[i].label or (on_check and "checkbox") or "nothing")
@@ -3752,7 +3765,13 @@ function notes.edit(shot, prefill, on_keep, title)
         end
         if ev ~= "down" and ev ~= "press" then return end
         local now = mp.get_time()
-        local p, r = drag.pointer(), B.note_rect
+        local r = B.note_rect
+        local p = drag.pointer_on(function(q)
+            if r and q.x >= r[1] and q.x <= r[3] and q.y >= r[2] and q.y <= r[4] then return true end
+            for _, bt in ipairs(buttons) do
+                if bt.enabled and q.x >= bt.x0 and q.x <= bt.x1 and q.y >= bt.y0 and q.y <= bt.y1 then return true end
+            end
+        end)
         local inside = p and r and p.x >= r[1] and p.x <= r[3] and p.y >= r[2] and p.y <= r[4]
         if not inside then
             b.clicks = {}
@@ -4567,6 +4586,8 @@ function notes.pin(kind, kind_only)
         r.inputs[m.num] = next(t) and t or false
         notes.touch(r, m.num)
         r.touched[m.num], r.cleared[m.num] = true, nil
+        -- the driver went off (unticked, or turned off by a frame): its note box goes too
+        if not t.driver and notes.box and notes.box.on_tab then notes.close(false) end
         render(true)
     end
     local function clear_conflicts(t, k)   -- k is turning on: what it can't go with goes off
@@ -4614,11 +4635,7 @@ function notes.pin(kind, kind_only)
         local warn = (target and target ~= shot and want ~= have)
             and string.format("   (driver is %d frames, %s is %d: the run needs them equal)", have, m.num, want) or ""
         osd(kind .. " driver for " .. m.num .. ": " .. what .. warn .. off, 4)
-        local function title()
-            local now = notes.inputs_of(r, m.num)
-            local k = now and now.driver and now.driver.kind or kind
-            return "Driver for " .. m.num .. ", " .. k .. "  (Tab: " .. (k == "depth" and "mask" or "depth") .. ")"
-        end
+        local function title() return "Driver Prompt" end   -- the box on the bar says which kind
         notes.edit(shot, "", function(text)
             local now = notes.inputs_of(r, m.num)
             if now and now.driver and now.driver.file == file then
