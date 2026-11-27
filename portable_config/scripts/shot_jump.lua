@@ -38,6 +38,7 @@ local o = {
     review_reviewers = "",   -- under the XML's folder: {"logins": {login: name}}
     export_audio_clip = "",  -- id of an audio clip whose file is the rendered video's sound
     review_notes_dir = "",   -- under the XML's folder: notes files from recorded reviews (i imports)
+    review_defaults = "",    -- under the XML's folder: {"recirculate_note": ...}, shown as a hint (never written)
     real_pointer = true,     -- Mac: a click asks macOS where the pointer is (no: trust mpv; for tests)
     -- Look only, for people who watch: a review always opens as a preview (no
     -- rebuild, no lock, no states, notes or Save), and no XML or video is written
@@ -1377,6 +1378,21 @@ mp.register_event("file-loaded", function()
     if s then slack.set_loop(s) else slack.unloop() end
 end)
 
+-- Leaving a shot whose slot shows a take other than its select puts the select
+-- back, so the cut always plays the selects. True when a reload is needed.
+-- slack.here = {xml, idx}: the shot that was on screen
+function slack.snap_back(left)
+    local asm = state.assembly
+    local r = asm and reviews[asm.xml]
+    local s = asm and asm.shots[left]
+    local mine = s and s.num and picks[asm.xml] and picks[asm.xml][s.num]
+    if not r or not mine or not session.select_of then return false end
+    local sel = session.select_of(r, s)
+    if sel and slash(mine) == sel then return false end
+    if not sel or sel == slash(s.xml_orig or "") then picks[asm.xml][s.num] = nil else picks[asm.xml][s.num] = sel end
+    return true
+end
+
 local function jump_to(i)
     local s = state.shots[i]
     if slack.loop and slack.loop.idx ~= i then slack.unloop() end   -- another shot: the timeline runs on
@@ -1751,6 +1767,59 @@ local function row_events(events, list, vx0, vy0, vw, k)
     local w, h = ROW.slot * k, B.size * k
     local x = vx0 + (vw - #list * w) / 2
     local y = vy0 + B.top * k
+    local function tick(tx, ty, ss, colour)   -- a drawn check: a line out and back
+        events[#events + 1] = string.format(
+            "{\\an7\\pos(0,0)\\p1\\bord%.2f\\shad0\\1a&HFF&\\3c&H%s&\\3a&H00&}m %.1f %.1f l %.1f %.1f %.1f %.1f %.1f %.1f{\\p0}",
+            ss * 0.08, colour, tx + ss * 0.12, ty + ss * 0.52, tx + ss * 0.4, ty + ss * 0.8,
+            tx + ss * 0.9, ty + ss * 0.2, tx + ss * 0.4, ty + ss * 0.8)
+    end
+    if list.mode then   -- select mode: a green bar, the select and its inputs, Apply on the right
+        local x0, x1 = vx0 + 40 * k, vx0 + vw - 40 * k
+        local y0, y1 = y - 8 * k, y + h + 8 * k
+        local cy = (y0 + y1) / 2
+        events[#events + 1] = string.format(
+            "{\\an7\\pos(0,0)\\p1\\bord%.2f\\shad0\\1c&H43A02E&\\1a&H28&\\3c&H000000&\\3a&H80&}m %.1f %.1f l %.1f %.1f %.1f %.1f %.1f %.1f{\\p0}",
+            1.5 * k, x0, y0, x1, y0, x1, y1, x0, y1)
+        tick(x0 + 18 * k, cy - 15 * k, 30 * k, "FFFFFF")
+        local text = "{\\b1}SELECT  " .. ass_text(list.mode.label) .. "{\\b0}"
+        if #list.mode.parts > 0 then
+            text = text .. "      " .. ass_text(table.concat(list.mode.parts, "     ·     "))
+        else
+            text = text .. "      {\\1c&HD8F0D8&}d driver (Shift+D: depth)  ·  s / e start / end frame, from any shot and take"
+        end
+        events[#events + 1] = string.format(
+            "{\\an4\\pos(%.1f,%.1f)\\bord%.2f\\shad0\\q2\\3c&H000000&\\3a&H70&\\1c&HFFFFFF&\\1a&H00&\\fs%.1f}%s",
+            x0 + 60 * k, cy, 1.5 * k, 26 * k, text)
+        -- X (cancel, as Esc) at the far right, Apply before it. Each takes a tall
+        -- hit area, from the top of the picture to under the bar, so a click near it lands
+        local xs = 56 * k
+        local xx0, xx1 = x1 - 14 * k - xs, x1 - 14 * k
+        local bw = 150 * k
+        local ax0, ax1 = xx0 - 14 * k - bw, xx0 - 14 * k
+        local function box(name, bx0, bx1, fill, lit)
+            local hot = hovered == name
+            events[#events + 1] = string.format(
+                "{\\an7\\pos(0,0)\\p1\\bord%.2f\\shad0\\1c&H%s&\\1a&H00&\\3c&HFFFFFF&\\3a&H%s&}m %.1f %.1f l %.1f %.1f %.1f %.1f %.1f %.1f{\\p0}",
+                2 * k, hot and lit or fill, hot and "00" or "60", bx0, y0 + 10 * k, bx1, y0 + 10 * k, bx1, y1 - 10 * k, bx0, y1 - 10 * k)
+        end
+        box("apply", ax0, ax1, "2A7A1E", "3FC255")
+        events[#events + 1] = string.format(
+            "{\\an5\\pos(%.1f,%.1f)\\bord0\\shad0\\b1\\q2\\1c&HFFFFFF&\\1a&H00&\\fs%.1f}Apply",
+            (ax0 + ax1) / 2, cy, 28 * k)
+        box("cancel", xx0, xx1, "305030", "3A3AC8")
+        local xc, r = (xx0 + xx1) / 2, 11 * k   -- the X: two strokes, out and back
+        events[#events + 1] = string.format(
+            "{\\an7\\pos(0,0)\\p1\\bord%.2f\\shad0\\1a&HFF&\\3c&HFFFFFF&\\3a&H00&}m %.1f %.1f l %.1f %.1f m %.1f %.1f l %.1f %.1f{\\p0}",
+            2.2 * k, xc - r, cy - r, xc + r, cy + r, xc + r, cy - r, xc - r, cy + r)
+        events[#events + 1] = string.format(
+            "{\\an6\\pos(%.1f,%.1f)\\bord0\\shad0\\q2\\1c&HD8F0D8&\\1a&H00&\\fs%.1f}Enter applies  ·  Esc cancels",
+            ax0 - 16 * k, cy, 20 * k)
+        local hy0, hy1 = vy0, y1 + 22 * k
+        buttons[#buttons + 1] = {name = "apply", x0 = ax0 - 7 * k, y0 = hy0, x1 = (ax1 + xx0) / 2, y1 = hy1, enabled = true}
+        buttons[#buttons + 1] = {name = "cancel", x0 = (ax1 + xx0) / 2, y0 = hy0, x1 = vx0 + vw, y1 = hy1, enabled = true}
+    elseif list.selected and #list > 0 then   -- the take on screen is the select: a check before the row
+        tick(x - 50 * k, y + h / 2 - 16 * k, 32 * k, "43C03E")
+    end
     -- each button takes its whole slot, from the top of the picture to a little
     -- under the label, so a click near the word lands; under the mouse a faint
     -- backdrop shows how far it reaches
@@ -1881,7 +1950,7 @@ local function row_events(events, list, vx0, vy0, vw, k)
         local bw, fs = 1000 * k, 28 * k
         local lh, pad = fs * 1.3, 7 * k
         local x0, y0 = vx0 + (vw - bw) / 2, y + h + ROW.note_gap * k
-        local label = "Notes for " .. bx.num
+        local label = bx.title or ("Notes for " .. bx.num)
         local sx = x0 + 16 * k + B.text_w(label .. "  ", fs)        -- where the text starts, on every line
         local lines = B.wrap(bx.chars, x0 + bw - 16 * k - sx, fs)
         local bh = #lines * lh + 2 * pad
@@ -1917,6 +1986,7 @@ local function row_events(events, list, vx0, vy0, vw, k)
                 text = esc(part(a, b))
             end
             if bx.chars[a] == " " then text = "\226\128\139" .. text end   -- or a space that starts the line is dropped
+            if #bx.chars == 0 and bx.hint then text = "{\\1c&H808080&}default: " .. esc(bx.hint) end   -- dim, until typing starts
             events[#events + 1] = string.format(
                 "{\\an4\\pos(%.1f,%.1f)\\bord0\\shad0\\q2\\1c&HFFFFFF&\\1a&H00&\\fs%.2f}%s", sx, cy, fs, text)
             if cur == i then   -- the cursor: a bar between the letters, drawn over them, taking no room
@@ -1930,6 +2000,16 @@ local function row_events(events, list, vx0, vy0, vw, k)
             lo < hi and "selected  ·  type to replace  ·  Cmd/Ctrl+C copies  ·  Cmd/Ctrl+X cuts"
             or "Enter saves the note  ·  Esc leaves it as it was  ·  Shift+arrows select  ·  Cmd/Ctrl+C X V copy, cut, paste")
         return
+    end
+    if list.note_hint and not list.box then   -- a re-circulate with no note: the project's default, dim
+        events[#events + 1] = string.format(
+            "{\\an8\\pos(%.1f,%.1f)\\bord%.2f\\shad0\\q2\\3c&H000000&\\3a&H60&\\1c&HA0A0A0&\\1a&H00&\\fs%.2f}%s",
+            vx0 + vw / 2, y + h + (ROW.note_gap + 9) * k, 2 * k, 26 * k, esc(list.note_hint))
+    end
+    if list.hint then   -- a take that isn't the select: how to make it one
+        events[#events + 1] = string.format(
+            "{\\an8\\pos(%.1f,%.1f)\\bord%.2f\\shad0\\q2\\3c&H000000&\\3a&H50&\\1c&HC0C0C0&\\1a&H00&\\fs%.2f}%s",
+            vx0 + vw / 2, y + h + (ROW.note_gap + 9) * k, 2 * k, 26 * k, esc(list.hint))
     end
     if list.note and list.note ~= "" then   -- the shot's note, under the row, wrapped like the box
         local chars = {}
@@ -1950,7 +2030,7 @@ end
 -- Shown only while paused, so playback stays clean (screen shares, recordings)
 button_events = function(events, shot, vx0, vy0, vw, k)
     buttons = {}
-    local list = mp.get_property_bool("pause") and shot_buttons(shot)
+    local list = (mp.get_property_bool("pause") or B.mode_on) and shot_buttons(shot)
     if not list then return end
     if list.row then return row_events(events, list, vx0, vy0, vw, k) end
     local d, gap = B.size * k, B.gap * k
@@ -2029,10 +2109,21 @@ local function render(force)
 end
 
 mp.observe_property("time-pos", "number", function()
+    local asm = state.assembly
+    local i = asm and current_shot_index()
     -- the looping shot was left some other way (a click on the seek bar): the timeline runs on
-    if slack.loop and state.assembly then
-        local i = current_shot_index()
-        if i and i ~= slack.loop.idx then slack.unloop() end
+    if slack.loop and i and i ~= slack.loop.idx then slack.unloop() end
+    -- another shot: the one left goes back to its select (a reload, landing where we are)
+    local here = slack.here
+    if i and here and here.xml == asm.xml and here.idx ~= i and not pending_action then
+        slack.here = {xml = asm.xml, idx = i}
+        if slack.snap_back(here.idx) then
+            pending_action = {kind = "choose", xml = asm.xml, pos = mp.get_property_number("time-pos")}
+            mp.commandv("loadfile", state.path, "replace")
+            return
+        end
+    elseif i then
+        slack.here = {xml = asm.xml, idx = i}
     end
     render()
 end)
@@ -2355,19 +2446,15 @@ local function shot_history(rows, keep)
 end
 
 -- Put a version in the shot's slot: remembered in picks and applied when the
--- assembly is rebuilt on the reload. Nothing is written.
+-- assembly is rebuilt on the reload. Nothing is written, and in a review it is
+-- only looked at: Enter makes a take the shot's select.
 local function choose_version(asm, shot, path, note, pos)
     picks[asm.xml] = picks[asm.xml] or {}
     picks[asm.xml][shot.num] = path
     local r = reviews[asm.xml]
-    if r then
-        r.touched[shot.num], r.cleared[shot.num] = true, nil
-        -- a new select: the state and note were about the file before it, and
-        -- stepping back to that file doesn't bring them back
-        r.marks[shot.num], r.notes[shot.num] = {file = slash(path), mark = false}, ""
-        r.by = r.by or {}; r.by[shot.num] = false
-        if r.imported and r.imported[shot.num] then r.imported[shot.num].applied = false end
-    elseif o.review_xml ~= "" then
+    if r and session.step_hint then
+        note = note .. session.step_hint(r, shot, path)   -- looking only: what makes it count
+    elseif not r and o.review_xml ~= "" then
         note = note .. "   (not saved: open " .. o.review_xml .. " to choose)"
     end
     pending_action = {kind = "choose", xml = asm.xml, notice = note,
@@ -2415,9 +2502,10 @@ local function version_step(dir)
                    string.format("%s  ·  %d / %d", rung_label(rung_info(f.path), shot.num_text), k, #list), pos)
 end
 
--- Shift+Down: the shot's newest run (the latest run batch), and again back to the
--- take it left. slack.back = {xml, idx, path}: where the jump came from
-function slack.latest_run()
+-- Shift+Up: the shot's select (in a review; elsewhere the take the XML names).
+-- Shift+Down: its earliest take, the bottom of Up / Down's list. Only looking,
+-- like Up / Down
+function slack.jump(to)
     local asm, shot = state.assembly, current_shot()
     if not asm or asm.generated then return end
     if not shot or not shot.rung or not shot.num then osd("no versions to show here", 1); return end
@@ -2425,26 +2513,20 @@ function slack.latest_run()
     local from = (browse and browse.idx == shot.idx) and browse.path or shot.play
     from = from and (original_of(from, rows) or from)
     local list = shot_history(rows, from)
-    local newest
-    for j, f in ipairs(list) do
-        if not f.retired and (f.rung or ""):match("^%u_runs$")
-           and (not newest or f.pass > list[newest].pass
-                or (f.pass == list[newest].pass and f.mtime >= list[newest].mtime)) then newest = j end
-    end
-    if not newest then osd("no runs of this shot", 1.5); return end
-    local here
-    for j, f in ipairs(list) do if from and slash(f.path) == slash(from) then here = j end end
-    local k, bk = newest, slack.back
-    if here == newest then   -- on it already: back to the take the jump left, if there was one
-        if not (bk and bk.xml == asm.xml and bk.idx == shot.idx) then
-            osd(rung_label(rung_info(list[newest].path), shot.num_text) .. "  ·  the newest run", 1.5); return
-        end
-        k = nil
-        for j, f in ipairs(list) do if slash(f.path) == slash(bk.path) then k = j end end
-        slack.back = nil
-        if not k then osd("the take it came from is gone", 1.5); return end
+    if #list == 0 then osd("no other versions of this shot", 1); return end
+    local r = reviews[asm.xml]
+    local want
+    if to == "select" then
+        want = r and session.select_of(r, shot) or slash(shot.xml_orig or shot.xml_file or "")
     else
-        slack.back = {xml = asm.xml, idx = shot.idx, path = from}
+        want = slash(list[1].path)
+    end
+    local k
+    for j, f in ipairs(list) do if slash(f.path) == want then k = j end end
+    local what = to == "select" and "the select" or "the earliest"
+    if not k then osd(what .. " isn't among this shot's versions", 1.5); return end
+    if from and slash(from) == want then
+        osd(rung_label(rung_info(list[k].path), shot.num_text) .. "  ·  " .. what, 1.2); return
     end
     local f = list[k]
     browse = {idx = shot.idx, path = f.path}
@@ -2455,8 +2537,8 @@ function slack.latest_run()
         mp.set_property_bool("pause", true)
         pos = shot.t + 0.0005
     end
-    choose_version(asm, shot, f.path, string.format("%s  ·  %d / %d%s", rung_label(rung_info(f.path), shot.num_text),
-                   k, #list, k == newest and "  ·  the newest run" or "  ·  back"), pos)
+    choose_version(asm, shot, f.path, string.format("%s  ·  %d / %d  ·  %s", rung_label(rung_info(f.path), shot.num_text),
+                   k, #list, what), pos)
 end
 
 -- ── Ctrl+S on a shot's first or last frame: NN_start.png / NN_end.png ─────────
@@ -2464,6 +2546,54 @@ end
 -- folder): one new pass per mpv session, opened on the first save, and never
 -- over a file that is already there. Any other frame is the usual snapshot.
 local frame_pass = {}   -- frames rung -> this session's pass folder
+
+-- The frames rung (the C_ folder) under shots, and this session's pass in it,
+-- opened on first use; fresh: open the next pass (a name in this one is taken)
+function slack.frames_pass(shots, fresh)
+    local sdir, cdir = native_seps(shots), nil
+    for _, d in ipairs(utils.readdir(sdir, "dirs") or {}) do
+        if d:match("^C_") then cdir = utils.join_path(sdir, d) end
+    end
+    if not cdir then return nil end
+    local pass = not fresh and frame_pass[cdir]
+    if not pass then
+        local top = -1
+        for _, d in ipairs(utils.readdir(cdir, "dirs") or {}) do
+            local v = d:match("^v%.(%d+)$")
+            if v then top = math.max(top, tonumber(v)) end
+        end
+        pass = utils.join_path(cdir, string.format("v.%03d", top + 1))
+        if not mkdir_p(pass) then osd("could not create " .. name_of(pass), 3); return nil end
+        frame_pass[cdir] = pass
+    end
+    return cdir, pass
+end
+
+-- On save: a pinned start / end frame (grabbed into mpv's cache when it was
+-- pinned) goes into the frames rung as the select's NN_start.png / NN_end.png,
+-- where the next run picks it up. Returns the inputs as saved (png: where it went)
+function slack.place_frames(r, num, inputs)
+    local out = {}
+    for k, v in pairs(inputs) do
+        local c = {}
+        for kk, vv in pairs(v) do c[kk] = vv end
+        if c.grab then
+            local data = read_file(c.grab)
+            local name = num .. "_" .. k .. ".png"
+            local cdir, pass = slack.frames_pass(r.shots)
+            if cdir and exists(utils.join_path(pass, name)) then cdir, pass = slack.frames_pass(r.shots, true) end
+            local dest = pass and utils.join_path(pass, name)
+            if data and dest and write_file(dest, data) then
+                c.png = slash(dest):sub(#slash(r.root) + 2)
+            else
+                osd("could not place " .. name .. " in the frames folder", 4)
+            end
+            c.grab = nil
+        end
+        out[k] = c
+    end
+    return out
+end
 
 local function save_frame()
     local function plain() mp.commandv("script-binding", "copy_remove_attempt_suffix/save_custom_snapshot_plain") end
@@ -2487,22 +2617,8 @@ local function save_frame()
         else osd("could not save " .. name_of(out), 3) end
         return
     end
-    local sdir, cdir = native_seps(ri.shots), nil
-    for _, d in ipairs(utils.readdir(sdir, "dirs") or {}) do
-        if d:match("^C_") then cdir = utils.join_path(sdir, d) end
-    end
+    local cdir, pass = slack.frames_pass(ri.shots)
     if not cdir then return plain() end
-    local pass = frame_pass[cdir]
-    if not pass then
-        local top = -1
-        for _, d in ipairs(utils.readdir(cdir, "dirs") or {}) do
-            local v = d:match("^v%.(%d+)$")
-            if v then top = math.max(top, tonumber(v)) end
-        end
-        pass = utils.join_path(cdir, string.format("v.%03d", top + 1))
-        if not mkdir_p(pass) then osd("could not create " .. name_of(pass), 3); return end
-        frame_pass[cdir] = pass
-    end
     local name = ri.num .. "_" .. which .. ".png"
     local out = utils.join_path(pass, name)
     if exists(out) then osd(name .. " is already in " .. name_of(pass) .. "; not replaced", 3); return end
@@ -2515,7 +2631,8 @@ mp.add_key_binding(nil, "shot_next", shot_next, {repeatable = true})
 mp.add_key_binding(nil, "shot_prev", shot_prev, {repeatable = true})
 mp.add_key_binding(nil, "version_up", function() version_step(1) end, {repeatable = true})     -- newer
 mp.add_key_binding(nil, "version_down", function() version_step(-1) end, {repeatable = true})  -- older
-mp.add_key_binding(nil, "version_latest_run", function() slack.latest_run() end)
+mp.add_key_binding(nil, "version_select", function() slack.jump("select") end)
+mp.add_key_binding(nil, "version_earliest", function() slack.jump("earliest") end)
 mp.add_key_binding(nil, "retire", retire)
 mp.add_key_binding(nil, "undo", restore)
 mp.add_key_binding(nil, "toggle_overlay", toggle_overlay)
@@ -2625,7 +2742,7 @@ end
 local saving_overlay = mp.create_osd_overlay("ass-events")
 saving_overlay.z = 1000
 
-local function draw_saving(name, secs, hint)
+local function draw_saving(name, secs, hint, list)
     local d = mp.get_property_native("osd-dimensions") or {w = 1920, h = 1080}
     local w, h = d.w or 1920, d.h or 1080
     local k = h / 1080
@@ -2638,6 +2755,13 @@ local function draw_saving(name, secs, hint)
             w / 2, h / 2 + 90 * k, 30 * k, ass_text(name), secs,
             hint or "  ·  press again to quit without the video"),
     }, "\n")
+    for i, line in ipairs(list or {}) do   -- what is being saved: one line per changed shot
+        if i > 14 then break end
+        saving_overlay.data = saving_overlay.data .. "\n" .. string.format(
+            "{\\an5\\pos(%.1f,%.1f)\\bord0\\shad0\\q2\\1c&HFFFFFF&\\1a&H00&\\fs%.1f}%s",
+            w / 2, h / 2 + (150 + (i - 1) * 36) * k, 28 * k,
+            ass_text(i == 14 and #list > 14 and ("and " .. (#list - 13) .. " more") or line))
+    end
     saving_overlay:update()
 end
 
@@ -3113,9 +3237,22 @@ local function read_selects(r)
             if type(e) == "table" and type(e.file) == "string" then
                 local mark, comp = type(e.mark) == "string" and e.mark or nil, e.comp == true
                 if mark == "comp" then mark, comp = nil, true end   -- an older save: comp was a state then
+                local inputs
+                if type(e.inputs) == "table" then
+                    for _, k in ipairs({"driver", "start", "end"}) do
+                        local v = e.inputs[k]
+                        if type(v) == "table" and type(v.file) == "string" then
+                            inputs = inputs or {}
+                            inputs[k] = {file = v.file, frame = tonumber(v.frame),
+                                         kind = v.kind == "depth" and "depth" or nil,
+                                         png = type(v.png) == "string" and v.png or nil,
+                                         note = type(v.note) == "string" and v.note or nil}
+                        end
+                    end
+                end
                 out[tostring(num)] = {file = e.file, mark = mark, comp = comp,
                                       note = type(e.note) == "string" and e.note or "",
-                                      by = type(e.by) == "string" and e.by or nil}
+                                      by = type(e.by) == "string" and e.by or nil, inputs = inputs}
             end
         end
     end
@@ -3138,6 +3275,25 @@ local function json_str(s)
     end) .. '"'
 end
 
+-- A select's inputs for its next run, as JSON: the driver take (with what to do
+-- with it) and the start / end frames, each from any take of any shot
+function session.inputs_json(t)
+    if type(t) ~= "table" then return nil end
+    local parts = {}
+    for _, k in ipairs({"driver", "start", "end"}) do
+        local v = t[k]
+        if type(v) == "table" and v.file then
+            local f = {'"file": ' .. json_str(v.file)}
+            if v.kind == "depth" then f[#f + 1] = '"kind": "depth"' end   -- footage when left out
+            if v.frame then f[#f + 1] = '"frame": ' .. string.format("%d", v.frame) end
+            if v.png then f[#f + 1] = '"png": ' .. json_str(v.png) end
+            if v.note and v.note ~= "" then f[#f + 1] = '"note": ' .. json_str(v.note) end
+            parts[#parts + 1] = json_str(k) .. ": {" .. table.concat(f, ", ") .. "}"
+        end
+    end
+    return #parts > 0 and ("{" .. table.concat(parts, ", ") .. "}") or nil
+end
+
 local function selects_text(shots, imported)
     local nums = {}
     for num in pairs(shots) do nums[#nums + 1] = num end
@@ -3148,7 +3304,8 @@ local function selects_text(shots, imported)
         rows[#rows + 1] = string.format('  %s: {"file": %s, "mark": %s,%s "note": %s%s}', json_str(num),
             json_str(e.file), e.mark and json_str(e.mark) or "null", e.comp and ' "comp": true,' or "",
             json_str(e.note or ""),
-            e.by and (', "by": ' .. json_str(e.by)) or "")
+            (e.by and (', "by": ' .. json_str(e.by)) or "") ..
+            (session.inputs_json(e.inputs) and (', "inputs": ' .. session.inputs_json(e.inputs)) or ""))
     end
     local imp = {}
     for _, f in ipairs(imported or {}) do imp[#imp + 1] = json_str(f) end
@@ -3289,31 +3446,68 @@ end
 
 -- marks ------------------------------------------------------------------------
 
--- The shot's state, which belongs to one file: this session's (r.marks[num] =
--- {file, mark}), else the saved one; nil when the slot shows any other file
+-- The shot's state, which belongs to its select (notes.select_of): this
+-- session's (r.marks[num] = {file, mark}), else the saved one. Up / Down only
+-- look at other takes; the row shows the state on the select itself
 local function mark_of(r, shot)
     if not shot.num then return nil end
-    local file = slash(shot.file or shot.play or "")
     local mine = r.marks[shot.num]
-    if mine then return (mine.file == file and mine.mark) or nil end
+    if mine then return mine.mark or nil end
     if r.cleared[shot.num] then return nil end
     local b = r.base[shot.num]
-    if b and slash(abs_file(r, b.file)) == file then return b.mark end
-    return nil
+    return b and b.mark or nil
 end
 
 -- A shot's note: one line of plain text saved in its entry's "note". This
 -- session's edit, else the saved one.
 local notes = {}
--- The comp switch, kept with the state: on only for the file it was set on
+-- The comp switch, kept with the state, on the select
 function notes.comp_of(r, shot)
     if not shot.num then return false end
-    local file = slash(shot.file or shot.play or "")
     local mine = r.marks[shot.num]
-    if mine then return mine.file == file and mine.comp == true end
+    if mine then return mine.comp == true end
     if r.cleared[shot.num] then return false end
     local b = r.base[shot.num]
-    return (b and b.comp == true and slash(abs_file(r, b.file)) == file) or false
+    return (b and b.comp == true) or false
+end
+-- The shot's select: the take its entry names. This session's choice (Enter),
+-- else the saved one, else what the review XML plays. A slash path
+function notes.select_of(r, shot)
+    if not shot or not shot.num then return nil end
+    local mine = r.marks[shot.num]
+    if mine and mine.file then return slash(mine.file) end
+    local b = not r.cleared[shot.num] and r.base[shot.num]
+    if b then return slash(abs_file(r, b.file)) end
+    return shot.xml_orig and slash(shot.xml_orig) or nil
+end
+session.select_of = notes.select_of   -- for the code above the notes
+-- is the take on screen the shot's select?
+function notes.on_select(r, shot)
+    local sel = notes.select_of(r, shot)
+    return sel ~= nil and sel == slash(shot.file or shot.play or "")
+end
+-- The project's default note for a re-circulate (review_defaults), shown dim in
+-- an empty note box and under the row; the project applies it itself, so it is
+-- never written into the choices file. Read again every few seconds (hand edits)
+function notes.recirc_default(r)
+    if o.review_defaults == "" then return nil end
+    local now = mp.get_time()
+    if not notes.defaults_t or now - notes.defaults_t > 5 then
+        local text = read_file(utils.join_path(r.root, native_seps(o.review_defaults)))
+        local j = text and utils.parse_json(text)
+        notes.defaults = type(j) == "table" and type(j.recirculate_note) == "string" and j.recirculate_note ~= ""
+                         and j.recirculate_note or nil
+        notes.defaults_t = now
+    end
+    return notes.defaults
+end
+
+-- the select's inputs for its next run: this session's, else the saved ones; nil for none
+function notes.inputs_of(r, num)
+    if r.inputs and r.inputs[num] ~= nil then return r.inputs[num] or nil end
+    if r.cleared[num] then return nil end
+    local b = r.base and r.base[num]
+    return b and b.inputs or nil
 end
 function notes.of(r, num)
     if r.notes[num] ~= nil then return r.notes[num] end
@@ -3390,7 +3584,7 @@ mp.observe_property("pause", "bool", function(_, paused)
     if paused == false and notes.box then notes.close(true) end
 end)
 
-function notes.edit(shot, prefill, on_keep)
+function notes.edit(shot, prefill, on_keep, title)
     local r = current_review()
     if not r or review_busy or export.prompting or not shot or not shot.num or in_preview(r) then return end
     if notes.box then notes.close(true) end
@@ -3398,7 +3592,7 @@ function notes.edit(shot, prefill, on_keep)
     local chars = notes.chars(prefill or notes.of(r, shot.num))
     -- pos: characters before the cursor.  anchor: where a selection began (nil: none);
     -- the selection is what lies between the anchor and the cursor
-    notes.box = {r = r, num = shot.num, chars = chars, pos = #chars, on_keep = on_keep}
+    notes.box = {r = r, num = shot.num, chars = chars, pos = #chars, on_keep = on_keep, title = title}
     local b = notes.box
     local function range()   -- the selection, as characters lo+1 .. hi
         if b.anchor and b.anchor ~= b.pos then return math.min(b.anchor, b.pos), math.max(b.anchor, b.pos) end
@@ -3942,6 +4136,26 @@ review_buttons = function(shot)
     local r = current_review()
     if not r or review_busy or not shot.rung or not shot.num or shot.missing or shot.retired then return nil end
     if r.preview then return {row = true, preview = "PREVIEW  ·  " .. lock.who(r.preview) .. "  ·  nothing can be saved"} end
+    if notes.mode and notes.mode.r == r then   -- select mode: the green bar instead of the row
+        local m = notes.mode
+        local ins = notes.inputs_of(r, m.num) or {}
+        local function lab(v)
+            local ri = rung_info(abs_file(r, v.file))
+            return ri and rung_label(ri) or name_of(v.file)
+        end
+        local parts = {}
+        if ins.driver then
+            parts[#parts + 1] = (ins.driver.kind == "depth" and "depth driver " or "driver ") .. lab(ins.driver) ..
+                ((ins.driver.note or "") ~= "" and ("  \"" .. ins.driver.note .. "\"") or "")
+        end
+        for _, k in ipairs({"start", "end"}) do
+            if ins[k] then parts[#parts + 1] = k .. " " .. lab(ins[k]) .. " f" .. tostring(ins[k].frame or "?") end
+        end
+        local list = {row = true, mode = {label = m.label, parts = parts}}
+        local b = notes.box
+        if b then list.box = {num = b.num, chars = b.chars, pos = b.pos, anchor = b.anchor, title = b.title} end
+        return list
+    end
     local cur, comp = mark_of(r, shot), notes.comp_of(r, shot)
     local list = {row = true, note = notes.of(r, shot.num), by = (cur or comp) and notes.by_of(r, shot.num) or nil}
     local it = notes.stepping(r, shot)
@@ -3957,15 +4171,30 @@ review_buttons = function(shot)
     end
     local b = notes.box
     if b and b.num == shot.num then
-        list.box = {num = b.num, chars = b.chars, pos = b.pos, anchor = b.anchor}
+        list.box = {num = b.num, chars = b.chars, pos = b.pos, anchor = b.anchor, title = b.title,
+                    hint = not b.title and cur == "recirculate" and notes.recirc_default(r) or nil}
+    end
+    if cur == "recirculate" and (list.note or "") == "" then
+        local d = notes.recirc_default(r)
+        if d then list.note_hint = "default: " .. d end
+    end
+    -- a take other than the select: its state isn't this take's, so the row greys
+    local away = not it and not notes.on_select(r, shot)
+    if away then
+        local sel = notes.select_of(r, shot)
+        local ri = sel and rung_info(sel)
+        cur, comp, list.by, list.note, list.note_hint = nil, false, nil, nil, nil
+        list.hint = "Enter makes this take the select" .. (ri and ("   ·   the select is " .. rung_label(ri, shot.num_text)) or "")
+    else
+        list.selected = true
     end
     for _, m in ipairs(MARKS) do
-        list[#list + 1] = {name = m.name, text = m.label, color = m.color, star = m.star, lit = cur == m.name}
+        list[#list + 1] = {name = m.name, text = m.label, color = m.color, star = m.star, lit = cur == m.name, off = away}
         if cur == m.name then list.state = true end
     end
     -- a final isn't comped: the switch is there, greyed, and keeps what it was
     list[#list + 1] = {name = "comp", text = MARKS.comp.label, color = MARKS.comp.color, toggle = true,
-                       lit = comp and cur ~= "final", off = cur == "final"}
+                       lit = comp and cur ~= "final", off = away or cur == "final"}
     return list
 end
 
@@ -3981,6 +4210,18 @@ review_detail = function(shot)
     if mark and not in_row then parts[#parts + 1] = MARK_TEXT[mark] or mark end
     if shot.detail then parts[#parts + 1] = shot.detail end
     if shot.copies and #shot.copies > 0 then parts[#parts + 1] = "in " .. table.concat(shot.copies, ", ") end
+    -- pinned as another select's input
+    local here, done = rel_file(r, shot.file or shot.play or ""), {}
+    for _, s in ipairs(state.shots or {}) do
+        if s.num and not done[s.num] then
+            done[s.num] = true
+            for k, v in pairs(notes.inputs_of(r, s.num) or {}) do
+                if here and v.file == here then
+                    parts[#parts + 1] = (k == "driver" and "driver" or (k .. " frame")) .. " for " .. s.num
+                end
+            end
+        end
+    end
     return #parts > 0 and table.concat(parts, "  ·  ") or nil
 end
 
@@ -3990,7 +4231,9 @@ local function set_mark(name)
     if not shot or not shot.rung or not shot.num or shot.missing or shot.retired then
         osd("nothing to mark here", 1.5); return
     end
+    if notes.mode then osd("select mode: Enter applies, Esc cancels", 1.5); return end
     if notes.step_mark(name) then return end   -- stepping an imported note: its state
+    if not notes.on_select(r, shot) then osd("Enter makes this take the select first", 2); return end
     local file = slash(shot.file or shot.play)
     local cur, comp = mark_of(r, shot), notes.comp_of(r, shot)
     local ask   -- open the note box: a state was set (not final: a final has no notes), or comp went on with no state
@@ -4017,7 +4260,11 @@ local function set_mark(name)
     render(true)
     if ask then notes.edit(shot) end   -- what the room said about it
 end
-review_click = set_mark
+review_click = function(name)   -- a click on the row, or on the green bar's Apply
+    if name == "apply" then return notes.mode_apply() end
+    if name == "cancel" then return notes.mode_cancel() end
+    return set_mark(name)
+end
 
 -- x: forget the shot's choice. Its entry leaves the choices file on save and the
 -- project's own rule decides what plays; until then the newest version shows.
@@ -4025,8 +4272,10 @@ local function clear_choice()
     local r, shot, asm = current_review(), current_shot(), state.assembly
     if not r or review_busy or export.prompting or not shot or not shot.rung or not shot.num or in_preview(r) then return end
     if notes.stepping(r, shot) then return notes.step_skip() end   -- stepping: x skips the imported note
-    r.marks[shot.num], r.notes[shot.num] = nil, nil
+    r.marks[shot.num], r.notes[shot.num], r.inputs[shot.num] = nil, nil, false
     local top = top_version(shot.rung.shots, shot.rung.nn, session.listing())
+    -- until it's saved, the select shows as the newest version (the project's rule then decides)
+    r.marks[shot.num] = {file = slash(top or shot.xml_orig or shot.play or ""), mark = false}
     if top and slash(top) ~= slash(shot.play or "") then
         choose_version(asm, shot, top, "choice cleared: " .. rung_label(rung_info(top), shot.num_text))
     else
@@ -4037,21 +4286,190 @@ local function clear_choice()
     render(true)
 end
 
+-- select mode -------------------------------------------------------------------
+-- Up / Down only look at takes. Enter makes the take on screen the shot's select
+-- (a check on the row) and opens select mode for it: a green bar across the top
+-- with the select and its inputs. Then any shot (Left / Right) and any take
+-- (Up / Down) can be pinned as an input for the select's next run: d the take as
+-- its driver (with a note on what to do with it), s / e the frame on screen as
+-- its start / end frame. Enter or Apply keeps it all (saved with the review),
+-- Esc puts the shot back as it was.
+notes.mode = nil   -- {r, num, idx, file, label, before}
+B.mode_on = false  -- for the drawing above: the bar shows while playing too
+
+function session.step_hint(r, shot, path)
+    if notes.mode then return "   ·   d driver  ·  s / e start / end frame" end
+    if slash(path) == notes.select_of(r, shot) then return "   ·   the select" end
+    return "   ·   Enter makes it the select"
+end
+
+function notes.mode_target(m)
+    for _, s in ipairs(state.shots or {}) do if s.idx == m.idx and s.num == m.num then return s end end
+    for _, s in ipairs(state.shots or {}) do if s.num == m.num then return s end end
+end
+
+function notes.mode_keys(on)
+    local list = {{"d", "driver", function() notes.pin("driver") end},
+                  {"D", "driver_kind", function() notes.driver_kind() end},
+                  {"s", "start", function() notes.pin("start") end},
+                  {"e", "end", function() notes.pin("end") end},
+                  {"ENTER", "apply", function() notes.mode_apply() end},
+                  {"KP_ENTER", "apply_kp", function() notes.mode_apply() end},
+                  {"ESC", "cancel", function() notes.mode_cancel() end}}
+    for _, k in ipairs({"r", "c", "a", "m", "n", "x", "i", "TAB", "Shift+TAB", "Ctrl+S", "Ctrl+Shift+s", "Meta+s"}) do
+        list[#list + 1] = {k, "off_" .. k, function() osd("select mode: Enter applies, Esc cancels", 1.5) end}
+    end
+    for _, b in ipairs(list) do
+        if on then mp.add_forced_key_binding(b[1], "shot_mode_" .. b[2], b[3])
+        else mp.remove_key_binding("shot_mode_" .. b[2]) end
+    end
+    B.mode_on = on
+end
+
+function notes.select_enter()
+    local r, shot = current_review(), current_shot()
+    if not r or not shot or not shot.rung or not shot.num or shot.missing or shot.retired then
+        mp.command("cycle fullscreen"); return
+    end
+    if notes.mode then return notes.mode_apply() end
+    if review_busy or export.prompting or in_preview(r) then return end
+    if notes.stepping(r, shot) then return notes.step_accept() end
+    local num, file = shot.num, slash(shot.file or shot.play)
+    local before = {mark = r.marks[num], note = r.notes[num], inputs = r.inputs[num],
+                    by = r.by and r.by[num], touched = r.touched[num], cleared = r.cleared[num]}
+    if not notes.on_select(r, shot) then
+        -- a new select: the state, note and inputs were the old one's
+        r.marks[num] = {file = file, mark = false, comp = false}
+        r.notes[num], r.inputs[num] = "", false
+        notes.touch(r, num)
+        r.touched[num], r.cleared[num] = true, nil
+    end
+    notes.mode = {r = r, num = num, idx = shot.idx, file = file,
+                  label = rung_label(rung_info(file), shot.num_text), before = before}
+    notes.mode_keys(true)
+    osd("select mode for " .. notes.mode.label .. ":  d driver  ·  s / e start / end frame  ·  Enter applies  ·  Esc cancels", 4)
+    render(true)
+end
+
+function notes.mode_apply()
+    local m = notes.mode
+    if not m then return end
+    notes.mode = nil
+    notes.mode_keys(false)
+    osd(m.label .. " is the select" .. (notes.inputs_of(m.r, m.num) and ", with its inputs" or "") ..
+        "   (Ctrl+Shift+S saves)", 3)
+    render(true)
+end
+
+function notes.mode_cancel()
+    local m = notes.mode
+    if not m then return end
+    local r, b = m.r, m.before
+    r.marks[m.num], r.notes[m.num], r.inputs[m.num] = b.mark, b.note, b.inputs
+    r.by = r.by or {}; r.by[m.num] = b.by
+    r.touched[m.num], r.cleared[m.num] = b.touched, b.cleared
+    notes.mode = nil
+    notes.mode_keys(false)
+    osd("select mode cancelled: " .. m.num .. " is as it was", 2)
+    render(true)
+end
+
+-- Shift+D in select mode: the pinned driver as footage (the take itself) or as
+-- depth (a depth video made from it); footage when "kind" is left out
+function notes.driver_kind()
+    local m = notes.mode
+    if not m then return end
+    local ins = notes.inputs_of(m.r, m.num)
+    if not ins or not ins.driver then osd("no driver pinned yet: d pins the take on screen", 2); return end
+    local t = {}
+    for k, v in pairs(ins) do t[k] = v end
+    local d = {}
+    for k, v in pairs(ins.driver) do d[k] = v end
+    d.kind = d.kind ~= "depth" and "depth" or nil
+    t.driver = d
+    m.r.inputs[m.num] = t
+    notes.touch(m.r, m.num)
+    m.r.touched[m.num] = true
+    osd("driver for " .. m.num .. ": " .. (d.kind == "depth" and "depth" or "footage"), 2)
+    render(true)
+end
+
+-- d / s / e in select mode: the take on screen (any shot) as the select's driver,
+-- the frame on screen as its start / end frame. The same again unpins it.
+function notes.pin(kind)
+    local m, r, shot, asm = notes.mode, current_review(), current_shot(), state.assembly
+    if not m or r ~= m.r or not asm then return end
+    if not shot or not shot.rung or shot.missing or shot.retired then osd("nothing to pin here", 1.5); return end
+    local file = rel_file(r, shot.file or shot.play)
+    if not file then osd("this take is outside the review's folder", 2); return end
+    local ins = {}
+    for k, v in pairs(notes.inputs_of(r, m.num) or {}) do ins[k] = v end
+    local what = rung_label(rung_info(shot.file or shot.play), shot.num_text)
+    local function set(t)
+        r.inputs[m.num] = next(t) and t or false
+        notes.touch(r, m.num)
+        r.touched[m.num], r.cleared[m.num] = true, nil
+        render(true)
+    end
+    if kind == "driver" then
+        if ins.driver and ins.driver.file == file then
+            ins.driver = nil; set(ins); osd("driver unpinned", 1.5); return
+        end
+        ins.driver = {file = file, note = ""}
+        set(ins)
+        local target = notes.mode_target(m)
+        local fps = asm.fps or 24
+        local want, have = target and math.floor(target.len * fps + 0.5), math.floor(shot.len * fps + 0.5)
+        local warn = (target and target ~= shot and want ~= have)
+            and string.format("   (driver is %d frames, %s is %d: the run needs them equal)", have, m.num, want) or ""
+        osd("driver for " .. m.num .. ": " .. what .. warn, 4)
+        notes.edit(shot, "", function(text)
+            local now = notes.inputs_of(r, m.num)
+            if now and now.driver and now.driver.file == file then
+                local t = {}
+                for k, v in pairs(now) do t[k] = v end
+                t.driver = {file = file, note = text, kind = now.driver.kind}
+                set(t)
+            end
+        end, "Driver for " .. m.num)
+        return
+    end
+    local clip = asm.seq.video[shot.idx]
+    local fps = asm.fps or 24
+    local pos = mp.get_property_number("time-pos") or shot.t
+    local n = math.max(1, math.floor(shot.len * fps + 0.5))
+    local off = math.min(n - 1, math.max(0, math.floor((pos - shot.t) * fps + 0.5)))
+    local frame = (clip and clip["in"] or 0) + off
+    local cur = ins[kind]
+    if cur and cur.file == file and cur.frame == frame then
+        ins[kind] = nil; set(ins); osd(kind .. " frame unpinned", 1.5); return
+    end
+    local dir = mp.command_native({"expand-path", "~~/cache"})
+    if not mkdir_p(dir) then osd("could not make mpv's cache folder", 3); return end
+    local grab = utils.join_path(dir, string.format("pin-%s-%s-%d.png", m.num, kind, os.time()))
+    mp.commandv("screenshot-to-file", grab, "video")
+    if not exists(grab) then osd("could not grab the frame", 3); return end
+    ins[kind] = {file = file, frame = frame, grab = grab}
+    set(ins)
+    osd(string.format("%s frame for %s: %s, frame %d", kind, m.num, what, frame), 3)
+end
+
 -- saving -----------------------------------------------------------------------
 
 -- What Save would write for the shot: {file, mark, note}, or nil for no entry
 local function review_entry(r, shot)
     if r.cleared[shot.num] then return nil end
-    local file = shot.file or shot.play
+    local file = notes.select_of(r, shot)
     if not file then return nil end
     local mark, comp = mark_of(r, shot), notes.comp_of(r, shot)
     local b = r.base[shot.num]
     -- never chosen and not marked: only a version other than the XML's own is a choice
     local note = notes.of(r, shot.num)
-    if not b and not mark and not comp and note == "" and slash(file) == slash(shot.xml_orig or "") then return nil end
-    -- who: only while there is a state, the comp switch or a note to answer for
-    local by = (mark or comp or note ~= "") and notes.by_of(r, shot.num) or nil
-    return {file = file, mark = mark, comp = comp, note = note, by = by}
+    local inputs = notes.inputs_of(r, shot.num)
+    if not b and not mark and not comp and note == "" and not inputs and file == slash(shot.xml_orig or "") then return nil end
+    -- who: only while there is a state, the comp switch, a note or inputs to answer for
+    local by = (mark or comp or note ~= "" or inputs) and notes.by_of(r, shot.num) or nil
+    return {file = file, mark = mark, comp = comp, note = note, by = by, inputs = inputs}
 end
 
 -- This session's shots whose entry differs from the saved one: {num, entry}
@@ -4066,7 +4484,8 @@ local function review_changes(r)
             if not e or not b then same = (e == nil and b == nil)
             else same = slash(abs_file(r, b.file)) == slash(e.file) and b.mark == e.mark
                         and (b.comp == true) == (e.comp == true)
-                        and (b.note or "") == (e.note or "") and b.by == e.by end
+                        and (b.note or "") == (e.note or "") and b.by == e.by
+                        and session.inputs_json(b.inputs) == session.inputs_json(e.inputs) end
             if not same then out[#out + 1] = {num = num, entry = e} end
         end
     end
@@ -4086,6 +4505,11 @@ local function show_result(r)
     local res = r.result
     r.result = nil
     if not res then return end
+    if res.ok then   -- it went through: the saving card listed the shots; no card to dismiss
+        osd(res.lines[1] or "review saved", 2.5)
+        if res.done then res.done(true) else render(true) end
+        return
+    end
     -- room for 16 lines: warnings, failures and the next steps ("to reroll: ...")
     -- first claim, then the newest of the rest
     local keep, room = {}, 16
@@ -4139,7 +4563,7 @@ local function save_review(done)
             osd("not saved: " .. name_of(c.entry.file) .. " is outside " .. name_of(r.root), 4); return
         end
         shots[c.num] = c.entry and {file = rel, mark = c.entry.mark, comp = c.entry.comp, note = c.entry.note,
-                                    by = c.entry.by} or nil
+                                    by = c.entry.by, inputs = c.entry.inputs and slack.place_frames(r, c.num, c.entry.inputs)} or nil
     end
     -- the notes files imported so far: the ones already listed and this session's
     local imported, seen = {}, {}
@@ -4149,10 +4573,33 @@ local function save_review(done)
     if not write_file(selects_path(r), selects_text(shots, imported)) then
         osd("could not write " .. name_of(selects_path(r)), 4); return
     end
-    r.base, r.marks, r.touched, r.cleared, r.notes, r.by = read_selects(r), {}, {}, {}, {}, {}
+    r.base, r.marks, r.touched, r.cleared, r.notes, r.by, r.inputs = read_selects(r), {}, {}, {}, {}, {}, {}
     r.base_imported, r.session_imported = imported, {}
     r.rescan = true   -- the scripts may have made new versions
     local report = {string.format("%s: %d shot%s changed", name_of(selects_path(r)), #changes, #changes == 1 and "" or "s")}
+    -- the changed shots, for the saving card: "07  ·  run 12  ·  re-roll, comp, note  ·  driver, start frame"
+    local changed = {}
+    for _, c in ipairs(changes) do
+        local e = c.entry
+        if not e then changed[#changed + 1] = c.num .. "  ·  choice cleared"
+        else
+            local ri = rung_info(abs_file(r, rel_file(r, e.file) or ""))
+            local what = {}
+            if e.mark then what[#what + 1] = (e.mark == "reroll" and "re-roll") or (e.mark == "recirculate" and "re-circulate") or e.mark end
+            if e.comp then what[#what + 1] = "comp" end
+            if (e.note or "") ~= "" then what[#what + 1] = "note" end
+            local ins = {}
+            for _, k in ipairs({"driver", "start", "end"}) do
+                if e.inputs and e.inputs[k] then
+                    ins[#ins + 1] = k == "driver" and (e.inputs[k].kind == "depth" and "depth driver" or "driver") or (k .. " frame")
+                end
+            end
+            local line = c.num .. "  ·  " .. (ri and rung_label(ri):gsub("^%S+%s*", "") or name_of(e.file))
+            if #what > 0 then line = line .. "  ·  " .. table.concat(what, ", ") end
+            if #ins > 0 then line = line .. "  ·  " .. table.concat(ins, ", ") end
+            changed[#changed + 1] = line
+        end
+    end
     msg.info("review saved: " .. selects_path(r))
 
     local cmds = {}
@@ -4166,9 +4613,9 @@ local function save_review(done)
     hide_osc(true)
     local t0 = mp.get_time()
     local tick = mp.add_periodic_timer(0.5, function()
-        draw_saving("updating the folders", math.floor(mp.get_time() - t0), "")
+        draw_saving("updating the folders", math.floor(mp.get_time() - t0), "", changed)
     end)
-    draw_saving("updating the folders", 0, "")
+    draw_saving("updating the folders", 0, "", changed)
 
     local function finish()
         tick:kill()
@@ -4250,7 +4697,9 @@ local function bind_review_keys(on)
                   {"n", "note", function() if not notes.step_edit() then notes.edit(current_shot()) end end},
                   {"i", "import", function() notes.import() end},
                   {"TAB", "step_next", function() notes.step(1) end},
-                  {"Shift+TAB", "step_prev", function() notes.step(-1) end}}
+                  {"Shift+TAB", "step_prev", function() notes.step(-1) end},
+                  {"ENTER", "select", function() notes.select_enter() end},
+                  {"KP_ENTER", "select_kp", function() notes.select_enter() end}}
     for _, m in ipairs(MARKS) do
         list[#list + 1] = {m.key, m.name, function() set_mark(m.name) end}
     end
@@ -4271,7 +4720,7 @@ end
 review_open = function(xml_path)
     if o.review_xml == "" or name_of(xml_path):lower() ~= o.review_xml:lower() then return end
     if reviews[xml_path] then return end
-    local r = {xml = xml_path, root = dir_of(xml_path), marks = {}, touched = {}, cleared = {}, notes = {}}
+    local r = {xml = xml_path, root = dir_of(xml_path), marks = {}, touched = {}, cleared = {}, notes = {}, inputs = {}}
     reviews[xml_path] = r
     if o.preview then   -- a look-only launch: the files stay as they are, and nobody is locked out
         r.preview = {view_only = true}
@@ -4305,6 +4754,7 @@ review_loaded = function(asm)
     local r = asm and reviews[asm.xml]
     if r and not asm.review_layout then reviews[asm.xml] = nil; r = nil end
     bind_review_keys(r ~= nil)
+    if not r and notes.mode then notes.mode = nil; notes.mode_keys(false) end
     if not r then return end
     if not r.shots then
         for _, shot in ipairs(asm.shots) do

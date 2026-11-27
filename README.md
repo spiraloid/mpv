@@ -129,7 +129,7 @@ Press `h` in mpv for the same list on screen.
 | `Ctrl+C` | Copy the frame to the clipboard |
 | `Ctrl+R` | Rebuild the playlist |
 | `Ctrl+N` | Jump to the next sibling folder |
-| `ENTER` / `F` / `Alt+ENTER` | Fullscreen |
+| `ENTER` / `F` / `Alt+ENTER` | Fullscreen (in a review `ENTER` makes the take on screen the select: use `F`) |
 | Middle click | Fullscreen ↔ quarter-size window |
 | `Esc` / `Q` | Quit (asks first if an XML has unsaved changes) |
 
@@ -139,14 +139,15 @@ Press `h` in mpv for the same list on screen.
 |-----|--------|
 | `LEFT` / `RIGHT` | Previous / next shot, on its first frame. An XML pauses there. Frame step when the file has no known cuts |
 | `WHEEL_UP` / `WHEEL_DOWN` | Previous / next shot, one per notch (XML) |
-| `UP` / `DOWN` | XML in rung folders: the shot's history. `UP` newer (to the final), `DOWN` older (to the cleaned plate). `Shift+DOWN` jumps to the shot's newest run and, pressed again, back. Pauses on the shot if it was playing, and `SPACE` then loops that shot until you move to another |
+| `UP` / `DOWN` | XML in rung folders: look through the shot's takes (in a review they only look; `ENTER` makes one the select). `UP` newer (to the final), `DOWN` older (to the cleaned plate). `Shift+UP` shows the shot's select, `Shift+DOWN` its earliest take. Pauses on the shot if it was playing, and `SPACE` then loops that shot until you move to another |
 | `o` | Show / hide the shot label and buttons (outside an XML: mpv's progress bar) |
 | `Shift+A` | XML: the sound you hear. It starts as the `.mp4`'s (the clip named by `export_audio_clip`); `Shift+A` switches to the XML's first audio track and back, and the choice holds until mpv quits. A render always uses the `.mp4`'s |
+| `ENTER` | Review: make the take on screen the shot's select (a check on the row) and open **select mode**: `d` pins the take on screen as the select's driver (with a note), `s` / `e` pin the frame on screen as its start / end frame, from any shot and take. `ENTER` or **Apply** keeps them, `Esc` puts the shot back |
 | `r` / `c` / `a` | Review: shot state **re-roll** / **re-circulate** / **final**. The same key again clears it. Or click the row across the top (shown while paused). Setting re-roll or re-circulate opens the note box |
 | `m` | Review: the **comp** switch, on or off beside the state |
 | `i` | Review: import the next notes file from a recorded review |
 | `Tab` / `Shift+Tab` | Review: step to the next / previous imported note (`Enter` accepts, `x` skips, `Esc` stops) |
-| `n` | Review: edit the shot's note (one line; Enter keeps it, Esc leaves it as it was) |
+| `n` | Review: edit the select's note (one line; Enter keeps it, Esc leaves it as it was) |
 | `x` | Review: clear the shot's choice, note included |
 | `Ctrl+Shift+S` (`Cmd+S`) | Review: save the choices file, then run the project's scripts |
 | `Ctrl+S` | XML in rung folders: on a shot's first / last frame, save `NN_start.png` / `NN_end.png`. Any other frame: numbered snapshot |
@@ -205,11 +206,23 @@ shots/
 
 A shot's file is one named for its shot number: `07.mp4` or `07_v4.mp4`, anywhere inside a rung, in any video format. Empty stub files are ignored.
 
-**A shot's history: `UP` / `DOWN`.** `LEFT` / `RIGHT` move between shots; `UP` / `DOWN` move through every version of the shot you're on. `UP` all the way is the final, `DOWN` all the way is the cleaned plate, and the ends stop. In an XML assembly `LEFT` / `RIGHT` pause on the shot's first frame, and `UP` / `DOWN` pressed during playback pause there too, so a swap always lands on the shot on screen. `Shift+DOWN` jumps straight to the shot's newest run (the latest run batch), and again back to the take you left. Once you've switched a shot's take, `SPACE` loops just that shot, over and over, with its whole label (run and batch) kept on screen; moving to another shot (`LEFT` / `RIGHT`, or a click on the seek bar) lets the edit play straight through again, until you switch a take there. In between, every run, run candidate, driver candidate and candidate (live or `retired/`) comes in the order it was made, by file time, so a driver sits right after the take it was made from and the rolls it led to follow it: `UP` walks the shot's progression forward. The cropped plate under the cleaned one is left out unless it is all the shot has. A file that is only a copy of a lower one (a final copied from a candidate, a pick copied from a run) isn't listed twice: the original is shown, and the small line over the label says where copies of it sit (`in final`). The shot folders are listed once a minute at most and shared by every take switch in between, so stepping is quick on a cloud drive; a version made in the last minute shows up on the next listing (Save and reject / restore list again at once).
+**A shot's history: `UP` / `DOWN`.** `LEFT` / `RIGHT` move between shots; `UP` / `DOWN` move through every version of the shot you're on. `UP` all the way is the final, `DOWN` all the way is the cleaned plate, and the ends stop. In an XML assembly `LEFT` / `RIGHT` pause on the shot's first frame, and `UP` / `DOWN` pressed during playback pause there too, so a swap always lands on the shot on screen. `Shift+UP` jumps straight to the shot's select and `Shift+DOWN` to its earliest take. Once you've switched a shot's take, `SPACE` loops just that shot, over and over, with its whole label (run and batch) kept on screen; moving to another shot (`LEFT` / `RIGHT`, or a click on the seek bar) lets the edit play straight through again, until you switch a take there. In between, every run, run candidate, driver candidate and candidate (live or `retired/`) comes in the order it was made, by file time, so a driver sits right after the take it was made from and the rolls it led to follow it: `UP` walks the shot's progression forward. The cropped plate under the cleaned one is left out unless it is all the shot has. A file that is only a copy of a lower one (a final copied from a candidate, a pick copied from a run) isn't listed twice: the original is shown, and the small line over the label says where copies of it sit (`in final`). The shot folders are listed once a minute at most and shared by every take switch in between, so stepping is quick on a cloud drive; a version made in the last minute shows up on the next listing (Save and reject / restore list again at once).
 
-Each press swaps that version into the slot, on the same frame (pressed during playback, it pauses on the shot's first frame), and a note shows where you are (`07 run 12 · 4 / 9`). The swap is held in memory: nothing is written until you save.
+Each press swaps that version into the slot, on the same frame (pressed during playback, it pauses on the shot's first frame), and a note shows where you are (`07 run 12 · 4 / 9`). In a review that's only looking: the shot's select stays what it was until you press `ENTER` on a take, and moving to another shot puts the slot back on its select, so the cut always plays the selects.
 
-**Shot state.** Pause on a shot and a row of text buttons appears across the top of the picture: three states, a divider, then the comp switch. One state per shot, on the version showing: click one (or press its key) to set it, click the set one again to clear it. A set state is drawn in its colour with a bar under it; the others are gray.
+**The select: `ENTER`.** The take a shot's entry names is its select: what the review XML plays and what the project's scripts act on. The row's states and the note belong to the select. On it the row shows a green check before the states; on any other take the row greys, `r` / `c` / `a` / `m` say "Enter makes this take the select first", and a line under the row names the select. `ENTER` on a take makes it the select (its state, note and inputs start empty: they were the old select's) and opens select mode.
+
+**Select mode.** A green bar replaces the row, playing or paused: the select on the left, then its inputs, and on the right **Apply** and an **X** (the same as `Esc`). Move anywhere, `LEFT` / `RIGHT` to any shot and `UP` / `DOWN` to any take, and pin what the select's next run should use:
+
+| Key | Pins |
+|-----|------|
+| `d` | The take on screen as the select's **driver**, then a box for what to do with it ("blur the background, keep the mouth sharp"). A driver from a shot of another length gets a warning: the run needs the frame counts equal |
+| `Shift+D` | The pinned driver as **depth** (a depth video made from the take) instead of the footage itself; again: footage |
+| `s` / `e` | The frame on screen as the select's **start** / **end** frame |
+
+The same key on the same take (or frame) again unpins it. A pinned take says so in the small line over its label (`driver for 07`). `ENTER` or **Apply** keeps the select and its inputs, saved like any choice; `Esc` puts the shot back as it was before `ENTER`. Inside the mode the state keys, `n`, `x` and Save wait for Apply.
+
+**Shot state.** Pause on a shot and a row of text buttons appears across the top of the picture: three states, a divider, then the comp switch. One state per shot, on its select: click one (or press its key) to set it, click the set one again to clear it. A set state is drawn in its colour with a bar under it; the others are gray.
 
 | Button | Key | Means |
 |--------|-----|-------|
@@ -226,7 +239,7 @@ Each press swaps that version into the slot, on the same frame (pressed during p
 | re-circulate | Refine, roll, then comp the new take |
 | ★ final | Nothing: the switch is greyed and takes no click, and keeps what it was |
 
-`x` clears the state and the switch, and so does stepping the shot to another version. Switching comp on with no state opens the note box.
+`x` clears the state and the switch, and so does making another take the select. Switching comp on with no state opens the note box.
 
 Setting re-roll or re-circulate opens a box under the row (a final has no notes: the star doesn't open the box, and it clears the note the shot had), **Notes for NN**, filled with the shot's current note: type what the room said and press `Enter`, or `Esc` to leave the note as it was. Long text wraps, and the box grows a line at a time. `n` opens the same box without changing the state. While it's open every key types or edits:
 
@@ -246,32 +259,34 @@ Setting re-roll or re-circulate opens a box under the row (a final has no notes:
 
 Typing replaces a selection. Copy and paste move a note between shots: copy it in one shot's box, `n` on the other shot, paste.
 
-The note shows under the row and is saved in the shot's `note`. The state and note belong to the version they were set on: step the shot to another version (`UP` / `DOWN`) and both clear, and stepping back doesn't bring them back.
+The note shows under the row and is saved in the shot's `note`. The state and note belong to the select: looking at other takes leaves them alone, and making another take the select (`ENTER`) clears them.
 
-The project's scripts act on these on save and print the next step for each marked shot (`to reroll: …`); the save card always shows those lines.
+The project's scripts act on these on save and print the next step for each marked shot (`to reroll: …`); those lines go to mpv's log, and onto a card only when something went wrong.
 
 A shot can also have a chosen version with no state. `x` clears a shot's choice altogether: its entry leaves the file on save and the project's own rule decides what plays.
 
 **Save: `Ctrl+Shift+S`** (`Cmd+S`), or Yes when you quit. mpv then:
 1. Reads `shots/selects.json` again, changes only the shots this session touched, and writes it in place.
 2. Runs the project's scripts (set in `script-opts/shot_jump.conf`), which apply the choices to the folders and rebuild the XML.
-3. Reloads the rebuilt XML and shows a card with the scripts' last lines, so the group sees what changed.
+3. Reloads the rebuilt XML. While it works, the SAVING card lists the shots being saved, one line each (`07 · run 12 · re-roll, note · driver, start frame`); when it's done there is nothing to dismiss.
 
-If a script is missing or fails, the card says so, word for word, and the choices file stays saved.
+If a script is missing or fails, a card says so, word for word, with the scripts' last lines, and the choices file stays saved.
 
 ```json
 {
  "saved": "2026-11-24T02:47:10Z",
  "by": "name",
  "shots": {
-  "07": {"file": "shots/F_runs/v.012/07.mp4", "mark": "reroll", "note": ""},
+  "07": {"file": "shots/F_runs/v.012/07.mp4", "mark": "recirculate", "note": "", "by": "name",
+         "inputs": {"driver": {"file": "shots/F_runs/v.009/07.mp4", "note": "blur the background"},
+                    "start": {"file": "shots/F_runs/v.003/10.mp4", "frame": 47, "png": "shots/C_frame_candidates/v.031/07_start.png"}}},
   "12": {"file": "shots/F_runs/v.012/12.mp4", "mark": "reroll", "comp": true, "note": "warmer"},
   "21": {"file": "shots/I_candidates/v.009/21.mp4", "mark": null, "note": "keep the blink"}
  }
 }
 ```
 
-`file` is relative to the XML's folder and always names an original, never a copy. `mark` is the shot state: `reroll`, `recirculate`, `final` or `null` (a `candidate` from an older save is kept as it is). `comp` is the comp switch: `true` when on, left out when off. An older save's `"mark": "comp"` reads as the switch on with no state, and is written back that way. Only shots with a choice or a note are listed. `note` is the shot's one-line note from the box; a note nobody edited this session is kept as it was. `by` is who set the state or note: whoever is logged in, lowercased, or the name it maps to in the reviewers file (`review_reviewers` in `script-opts/shot_jump.conf`, `{"logins": {"login": "name"}}`). It is written when someone sets a state, flips the comp switch or edits a note, dropped when the state, the switch and the note are gone, and an entry nobody touched keeps its saved `by`. The set state shows the name beside it.
+`file` is relative to the XML's folder and always names an original, never a copy. `mark` is the shot state: `reroll`, `recirculate`, `final` or `null` (a `candidate` from an older save is kept as it is). `comp` is the comp switch: `true` when on, left out when off. An older save's `"mark": "comp"` reads as the switch on with no state, and is written back that way. Only shots with a choice or a note are listed. `note` is the shot's one-line note from the box; a note nobody edited this session is kept as it was. `by` is who set the state or note: whoever is logged in, lowercased, or the name it maps to in the reviewers file (`review_reviewers` in `script-opts/shot_jump.conf`, `{"logins": {"login": "name"}}`). It is written when someone sets a state, flips the comp switch or edits a note, dropped when the state, the switch and the note are gone, and an entry nobody touched keeps its saved `by`. The set state shows the name beside it. `inputs` holds what select mode pinned for the select's next run: `driver` (`file`, `kind`: `"depth"` for a depth driver, left out for footage, and `note`: what to do with it) and `start` / `end` (`file`, `frame` within it, and `png`: the frame itself, placed on save in the frames rung as the select's `NN_start.png` / `NN_end.png`, in this session's pass, where the next run picks it up); left out when nothing is pinned.
 
 **Opening.** The review XML is the one named by `review_xml` (default `review.xml`). Before it loads, mpv runs the project's build script so the XML matches the folders and the saved choices; every shot starts on its chosen version, with its state lit. If the script can't run, mpv says why and plays the XML as it is.
 
