@@ -600,7 +600,7 @@ local HELP = {
     {"Wheel", "XML: previous / next shot"},
     {"o   ·   Shift + a", "Show / hide the shot label and buttons   ·   sound: as the .mp4 / the source"},
     {"REVIEW   the review XML; pause to see the state row"},
-    {"Up / Down", "The shot's history: Up older (to the plate), Down newer (to the final)"},
+    {"Up / Down  ·  Shift + Down", "The shot's history: Up newer, Down older   ·   its newest run, and back"},
     {"r / c / a   ·   m", "Shot state: re-roll / re-circulate / final  (again: clear)   ·   comp on / off"},
     {"n", "Edit the shot's note   (re-roll and re-circulate open it too)"},
     {"in the note box", "Click, drag, double click: cursor, select, word  ·  Shift / Ctrl + arrows"},
@@ -720,7 +720,8 @@ mp.add_key_binding("MBTN_MID",   "toggle_fullscreen_mouse",    function()
 end)
 mp.add_key_binding("ENTER",      "toggle_fullscreen_enter",    function() mp.command("cycle fullscreen") end)
 -- XML assembly: Up / Down step through the history of the shot on screen, Up
--- older (to the plate), Down newer (to the final) (shot_jump.lua)
+-- newer (to the final), Down older (to the plate); Shift+Down jumps to its newest
+-- run and back (shot_jump.lua)
 mp.add_key_binding("UP",         "navigate_prev",              function()
     if is_xml_assembly(mp.get_property("path")) then mp.commandv("script-binding", "shot_jump/version_up"); return end
     navigate_playlist("prev")
@@ -728,6 +729,10 @@ end)
 mp.add_key_binding("DOWN",       "navigate_next",              function()
     if is_xml_assembly(mp.get_property("path")) then mp.commandv("script-binding", "shot_jump/version_down"); return end
     navigate_playlist("next")
+end)
+mp.add_key_binding("Shift+DOWN", "newest_run",                 function()
+    if is_xml_assembly(mp.get_property("path")) then mp.commandv("script-binding", "shot_jump/version_latest_run"); return end
+    mp.command("no-osd seek -5 exact")   -- mpv's own Shift+Down
 end)
 
 -- Wheel input arrives two ways on macOS:

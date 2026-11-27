@@ -1500,7 +1500,9 @@ local function label_events(events, shot, vx0, vy0, vw, vh, k)
     end
     -- playing: only the shot number (and the new badge); the rest of the label
     -- and the line over it show on pause
-    local paused = mp.get_property_bool("pause")
+    -- a shot whose take was switched keeps its whole label while it loops, so
+    -- the run and batch stay in sight
+    local paused = mp.get_property_bool("pause") or (slack.loop and slack.loop.idx == shot.idx)
     if not paused then rest = "" end
     local x = vx0 + vw - L.right * k
     local y = vy0 + vh - (L.baseline - L.descent * L.fs_big) * k
@@ -2413,6 +2415,50 @@ local function version_step(dir)
                    string.format("%s  ·  %d / %d", rung_label(rung_info(f.path), shot.num_text), k, #list), pos)
 end
 
+-- Shift+Down: the shot's newest run (the latest run batch), and again back to the
+-- take it left. slack.back = {xml, idx, path}: where the jump came from
+function slack.latest_run()
+    local asm, shot = state.assembly, current_shot()
+    if not asm or asm.generated then return end
+    if not shot or not shot.rung or not shot.num then osd("no versions to show here", 1); return end
+    local rows = shot_versions(shot.rung.shots, shot.rung.nn)
+    local from = (browse and browse.idx == shot.idx) and browse.path or shot.play
+    from = from and (original_of(from, rows) or from)
+    local list = shot_history(rows, from)
+    local newest
+    for j, f in ipairs(list) do
+        if not f.retired and (f.rung or ""):match("^%u_runs$")
+           and (not newest or f.pass > list[newest].pass
+                or (f.pass == list[newest].pass and f.mtime >= list[newest].mtime)) then newest = j end
+    end
+    if not newest then osd("no runs of this shot", 1.5); return end
+    local here
+    for j, f in ipairs(list) do if from and slash(f.path) == slash(from) then here = j end end
+    local k, bk = newest, slack.back
+    if here == newest then   -- on it already: back to the take the jump left, if there was one
+        if not (bk and bk.xml == asm.xml and bk.idx == shot.idx) then
+            osd(rung_label(rung_info(list[newest].path), shot.num_text) .. "  ·  the newest run", 1.5); return
+        end
+        k = nil
+        for j, f in ipairs(list) do if slash(f.path) == slash(bk.path) then k = j end end
+        slack.back = nil
+        if not k then osd("the take it came from is gone", 1.5); return end
+    else
+        slack.back = {xml = asm.xml, idx = shot.idx, path = from}
+    end
+    local f = list[k]
+    browse = {idx = shot.idx, path = f.path}
+    slack.loop = {xml = asm.xml, idx = shot.idx}
+    if B.mark_seen then B.mark_seen(shot, f.path) end
+    local pos
+    if not mp.get_property_bool("pause") then
+        mp.set_property_bool("pause", true)
+        pos = shot.t + 0.0005
+    end
+    choose_version(asm, shot, f.path, string.format("%s  ·  %d / %d%s", rung_label(rung_info(f.path), shot.num_text),
+                   k, #list, k == newest and "  ·  the newest run" or "  ·  back"), pos)
+end
+
 -- ── Ctrl+S on a shot's first or last frame: NN_start.png / NN_end.png ─────────
 -- The clean video frame of the version showing, into the frames rung (the C_
 -- folder): one new pass per mpv session, opened on the first save, and never
@@ -2467,8 +2513,9 @@ end
 
 mp.add_key_binding(nil, "shot_next", shot_next, {repeatable = true})
 mp.add_key_binding(nil, "shot_prev", shot_prev, {repeatable = true})
-mp.add_key_binding(nil, "version_up", function() version_step(-1) end, {repeatable = true})    -- older
-mp.add_key_binding(nil, "version_down", function() version_step(1) end, {repeatable = true})   -- newer
+mp.add_key_binding(nil, "version_up", function() version_step(1) end, {repeatable = true})     -- newer
+mp.add_key_binding(nil, "version_down", function() version_step(-1) end, {repeatable = true})  -- older
+mp.add_key_binding(nil, "version_latest_run", function() slack.latest_run() end)
 mp.add_key_binding(nil, "retire", retire)
 mp.add_key_binding(nil, "undo", restore)
 mp.add_key_binding(nil, "toggle_overlay", toggle_overlay)
