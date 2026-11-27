@@ -2116,7 +2116,11 @@ local function render(force)
     local i = state.assembly and current_shot_index()
     local shot = i and state.shots[i]
     local d = mp.get_property_native("osd-dimensions")
-    if not shot or not d or not d.w or d.w <= 0 then clear_overlay(); return end
+    if not shot or not d or not d.w or d.w <= 0 then
+        -- mid reload (a take swap) there's no shot for a moment: keep what's drawn
+        if overlay_key == "stale" and not mp.get_property_number("time-pos") then return end
+        clear_overlay(); return
+    end
     local key = table.concat({i, d.w, d.h, d.ml, d.mt, d.mr, d.mb, tostring(hovered),
                               tostring(overlay_on),
                               tostring(mp.get_property_bool("pause"))}, ":")
@@ -2164,7 +2168,12 @@ mp.observe_property("time-pos", "number", function()
 end)
 mp.observe_property("osd-dimensions", "native", function() render(true) end)
 mp.observe_property("pause", "bool", function() render() end)
-mp.register_event("end-file", clear_overlay)
+mp.register_event("end-file", function()
+    -- a take swap (or a save) reloads the same XML: the overlay stays up until the
+    -- reloaded one draws over it, so the row and label don't flash
+    if pending_action and pending_action.kind == "choose" then overlay_key = "stale"; return end
+    clear_overlay()
+end)
 
 -- ── reject (r) ────────────────────────────────────────────────────────────────
 
