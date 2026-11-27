@@ -126,7 +126,7 @@ local function open_files(paths, unsaved)
     for _, p in ipairs(paths) do
         if not same_file(p, cur) then
             if unsaved then
-                mp.osd_message("Already open, with unsaved choices.  Save (Ctrl+Shift+S) or quit it,\n" ..
+                mp.osd_message("Already open, with unsaved choices.  Save (Ctrl+S) or quit it,\n" ..
                                "then open " .. (p:match("[^/\\]+$") or p) .. " again.", 6)
                 break
             end

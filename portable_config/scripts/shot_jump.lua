@@ -2569,7 +2569,7 @@ function slack.jump(to)
                    k, #list, what), pos)
 end
 
--- ── Ctrl+S on a shot's first or last frame: NN_start.png / NN_end.png ─────────
+-- ── Ctrl+E on a shot's first or last frame: NN_start.png / NN_end.png ─────────
 -- The clean video frame of the version showing, into the frames rung (the C_
 -- folder): one new pass per mpv session, opened on the first save, and never
 -- over a file that is already there. Any other frame is the usual snapshot.
@@ -2661,6 +2661,10 @@ mp.add_key_binding(nil, "version_up", function() version_step(1) end, {repeatabl
 mp.add_key_binding(nil, "version_down", function() version_step(-1) end, {repeatable = true})  -- older
 mp.add_key_binding(nil, "version_select", function() slack.jump("select") end)
 mp.add_key_binding(nil, "version_earliest", function() slack.jump("earliest") end)
+-- Ctrl+S in an XML that isn't a review: nothing waits to be saved there
+mp.add_key_binding(nil, "xml_save", function()
+    osd("this XML saves as you go: a reject or restore is written at once  ·  Ctrl+E saves a snapshot", 3)
+end)
 mp.add_key_binding(nil, "retire", retire)
 mp.add_key_binding(nil, "undo", restore)
 mp.add_key_binding(nil, "toggle_overlay", toggle_overlay)
@@ -4439,7 +4443,7 @@ function notes.mode_keys(on)
                   {"ENTER", "apply", function() notes.mode_apply() end},
                   {"KP_ENTER", "apply_kp", function() notes.mode_apply() end},
                   {"ESC", "cancel", function() notes.mode_cancel() end}}
-    for _, k in ipairs({"r", "c", "a", "m", "n", "x", "i", "TAB", "Shift+TAB", "Ctrl+S", "Ctrl+Shift+s", "Meta+s"}) do
+    for _, k in ipairs({"r", "c", "a", "m", "n", "x", "i", "TAB", "Shift+TAB", "Ctrl+s", "Ctrl+S", "Ctrl+Shift+s", "Meta+s"}) do
         list[#list + 1] = {k, "off_" .. k, function() osd("select mode: Enter applies, Esc cancels", 1.5) end}
     end
     for _, b in ipairs(list) do
@@ -4480,7 +4484,7 @@ function notes.mode_apply()
     notes.mode = nil
     notes.mode_keys(false)
     osd(m.label .. " is the select" .. (notes.inputs_of(m.r, m.num) and ", with its inputs" or "") ..
-        "   (Ctrl+Shift+S saves)", 3)
+        "   (Ctrl+S saves)", 3)
     render(true)
 end
 
@@ -4859,7 +4863,7 @@ local function bind_review_keys(on)
         list[#list + 1] = {m.key, m.name, function() set_mark(m.name) end}
     end
     list[#list + 1] = {MARKS.comp.key, "comp", function() set_mark("comp") end}
-    for _, key in ipairs({"Ctrl+S", "Ctrl+Shift+s", "Meta+s"}) do
+    for _, key in ipairs({"Ctrl+s", "Ctrl+S", "Ctrl+Shift+s", "Meta+s"}) do
         list[#list + 1] = {key, "save_" .. key, function() save_review() end}
     end
     for _, b in ipairs(list) do

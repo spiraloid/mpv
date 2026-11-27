@@ -125,7 +125,8 @@ Press `h` in mpv for the same list on screen.
 | `\` | Variant mode: show / hide `_attempt_##` files |
 | `Ctrl+LEFT` / `Ctrl+RIGHT` | Shift a media group backward / forward |
 | `DEL` / `F2` | Move the file to the trash / rename it |
-| `Ctrl+S` | Numbered snapshot (in an XML, see below) |
+| `Ctrl+E` | Numbered snapshot (in an XML, see below) |
+| `Ctrl+S` | In an XML: save it (a review: its choices). Elsewhere a numbered snapshot, as `Ctrl+E` |
 | `Ctrl+C` | Copy the frame to the clipboard |
 | `Ctrl+R` | Rebuild the playlist |
 | `Ctrl+N` | Jump to the next sibling folder |
@@ -149,9 +150,9 @@ Press `h` in mpv for the same list on screen.
 | `Tab` / `Shift+Tab` | Review: step to the next / previous imported note (`Enter` accepts, `x` skips, `Esc` stops) |
 | `n` | Review: edit the select's note (one line; Enter keeps it, Esc leaves it as it was) |
 | `x` | Review: clear the shot's choice, note included |
-| `Ctrl+Shift+S` (`Cmd+S`) | Review: save the choices file, then run the project's scripts |
+| `Ctrl+S` (`Ctrl+Shift+S`, `Cmd+S`) | Review: save the choices file, then run the project's scripts |
 | `Ctrl+R` | Review: read the folders again and rebuild the cut (the project's build script), so new takes, comps and shots show without quitting. A preview only reads the folders again |
-| `Ctrl+S` | XML in rung folders: on a shot's first / last frame, save `NN_start.png` / `NN_end.png`. Any other frame: numbered snapshot |
+| `Ctrl+E` | XML in rung folders: on a shot's first / last frame, save `NN_start.png` / `NN_end.png`. Any other frame: numbered snapshot |
 | `r` / `u` | Plain XML (no rung folders): reject the clip on screen / restore it |
 
 The review keys work only while the review XML is open (see [Shot review](#shot-review) below); elsewhere `r` / `c` / `m` / `a` / `x` keep their usual jobs (`m` is mute).
@@ -266,7 +267,7 @@ The project's scripts act on these on save and print the next step for each mark
 
 A shot can also have a chosen version with no state. `x` clears a shot's choice altogether: its entry leaves the file on save and the project's own rule decides what plays.
 
-**Save: `Ctrl+Shift+S`** (`Cmd+S`), or Yes when you quit. mpv then:
+**Save: `Ctrl+S`** (also `Ctrl+Shift+S`, `Cmd+S`), or Yes when you quit. mpv then:
 1. Reads `shots/selects.json` again, changes only the shots this session touched, and writes it in place.
 2. Runs the project's scripts (set in `script-opts/shot_jump.conf`), which apply the choices to the folders and rebuild the XML.
 3. Reloads the rebuilt XML. While it works, the SAVING card lists the shots being saved, one line each (`07 · run 12 · re-roll, note · driver, start frame`); the card shows which script is running and stays over the reload until the rebuilt review shows its frame, so the old frame doesn't flash back, and there is nothing to dismiss. Saving as you quit (Yes) skips the reload and closes as soon as the scripts are done. How long each script took goes to mpv's log (`review save: … took …`).
@@ -299,11 +300,11 @@ If a script is missing or fails, a card says so, word for word, with the scripts
 
 **Someone else has it open: preview.** Opening the review writes `review.xml.lock` beside it (your name, your computer, a heartbeat every minute) and quitting removes it. Anyone who opens the review while that lock is fresh, on any computer that shares the folder, gets a **preview**: a yellow line where the state row would be says who has it open and since when, and they can look and step through versions, but can't set states, write notes or save, and the project's build script isn't run for them. When the editor quits, the preview says so, and `Esc` then makes you the editor right there: mpv takes the lock, reads what they saved and reloads the XML their save rebuilt, on the same frame (no quitting and reopening). While they still have it open, `Esc` quits as usual. A lock whose heartbeat is ten minutes old (a crash, a laptop that went to sleep) is free again. If two people open it within the same minute, the next heartbeat leaves one of them as the editor and switches the other to preview; Save checks the lock again first, so a stale state is never written over the choices.
 
-<a id="look-only-launches"></a>**Look-only launches.** mpv started with `--script-opts-append=shot_jump-preview=yes` (what `reviewapp.sh` and `reviewapp.ps1` put in the shortcut unless given `--edit` / `-Edit`) opens every review as a preview, whoever has it open: the yellow line says **view only**, and they can step through versions but can't set states, write notes or save. It never writes an XML or a video: the build script doesn't run, there's no lock (so nobody else is turned into a preview), no `seen.json`, no reject or restore in a plain XML, no `clip.xml` beside a scanned video, and quitting doesn't ask anything. If that mpv hands its file to one already running, that one becomes look-only too, for the rest of its run. Frame grabs (`Ctrl+S`) still work, all beside the XML: a shot's first or last frame lands there as `NN_start.png` / `NN_end.png` (then `NN_start_2.png` and on, never over one), not in the frames folder.
+<a id="look-only-launches"></a>**Look-only launches.** mpv started with `--script-opts-append=shot_jump-preview=yes` (what `reviewapp.sh` and `reviewapp.ps1` put in the shortcut unless given `--edit` / `-Edit`) opens every review as a preview, whoever has it open: the yellow line says **view only**, and they can step through versions but can't set states, write notes or save. It never writes an XML or a video: the build script doesn't run, there's no lock (so nobody else is turned into a preview), no `seen.json`, no reject or restore in a plain XML, no `clip.xml` beside a scanned video, and quitting doesn't ask anything. If that mpv hands its file to one already running, that one becomes look-only too, for the rest of its run. Frame grabs (`Ctrl+E`) still work, all beside the XML: a shot's first or last frame lands there as `NN_start.png` / `NN_end.png` (then `NN_start_2.png` and on, never over one), not in the frames folder.
 
 **Quitting** with unsaved choices asks **Save changes?** Yes saves as above and then quits, No forgets the session's choices (nothing was written, so nothing needs undoing), Cancel carries on. Tick **Also save an .mp4 of the review** (click it or press `V`; off by default) and Yes also renders the rebuilt review XML to an `.mp4` beside it (`review.xml` → `review.mp4`) behind a **SAVING…** card, then quits; pressing quit again skips the video. It renders only when the save went through, so the video never shows an XML the scripts failed to rebuild. Its sound is the approved edit's: the XML's audio clip named by `export_audio_clip` in `script-opts/shot_jump.conf` (kept disabled in the XML, so an editor importing it doesn't hear it under the voice), in its own channels. Without that clip the video carries the first audio track. While you review, mpv plays the same sound the video will have; `Shift+A` switches to the first audio track and back. It plays that sound from a copy in mpv's `cache` folder, made the first time (and again when the edit changes) in the background: the XML's audio track plays until the copy is ready, then the review reloads onto it. Reading it straight from a big edit video on a cloud drive made opening take minutes.
 
-**Start and end frames: `Ctrl+S`.** On the first frame of a shot it saves `NN_start.png`, on the last frame `NN_end.png`: the clean video frame of the version showing, with no label or buttons. They go in the frames rung (the `C_` folder), in one new pass per mpv session, opened on the first save. A file that is already there is never replaced. On any other frame `Ctrl+S` takes the usual numbered snapshot.
+**Start and end frames: `Ctrl+E`.** On the first frame of a shot it saves `NN_start.png`, on the last frame `NN_end.png`: the clean video frame of the version showing, with no label or buttons. They go in the frames rung (the `C_` folder), in one new pass per mpv session, opened on the first save. A file that is already there is never replaced. On any other frame `Ctrl+S` takes the usual numbered snapshot.
 
 **Setting it up.** `script-opts/shot_jump.conf` names the review XML and the project's scripts, each as a path under the XML's folder plus arguments. They are run as `uv run --directory <xml folder> --script <path> <arguments>`, so the project needs [uv](https://docs.astral.sh/uv/) installed (`review_runner` takes its full path when mpv can't find it). Leave the commands empty to save the choices file and nothing more.
 

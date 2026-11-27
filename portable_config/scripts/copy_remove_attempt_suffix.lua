@@ -590,7 +590,7 @@ local HELP = {
     {"\\", "Variant mode: show / hide _attempt_ files"},
     {"Ctrl + Left / Right", "Shift a media group backward / forward"},
     {"Del  /  F2", "Move to the trash  /  rename"},
-    {"Ctrl + s", "Numbered snapshot   (XML: below)"},
+    {"Ctrl + e  /  Ctrl + s", "Numbered snapshot   (XML: below)  /  in an XML: save it"},
     {"Ctrl + c", "Copy the frame to the clipboard"},
     {"Ctrl + r  /  Ctrl + n", "Rebuild the playlist  /  next sibling folder"},
     {"Enter  /  Middle click", "Fullscreen (f in a review)  /  quarter-size window"},
@@ -606,8 +606,8 @@ local HELP = {
     {"n   ·   x", "Edit the select's note (re-roll, re-circulate open it)   ·   clear the shot's choice"},
     {"in the note box", "Click, drag, double click: cursor, select, word  ·  Shift / Ctrl + arrows"},
     {"i  /  Tab", "Import notes from a recorded review  /  step through them (Enter accepts)"},
-    {"Ctrl + Shift + s  ·  Ctrl + r", "Save: the choices file, then the project's scripts   ·   rebuild the cut"},
-    {"Ctrl + s", "On a shot's first / last frame: NN_start.png / NN_end.png"},
+    {"Ctrl + s  ·  Ctrl + r", "Save: the choices file, then the project's scripts   ·   rebuild the cut"},
+    {"Ctrl + e", "On a shot's first / last frame: NN_start.png / NN_end.png"},
     {"PLAIN XML   no rung folders"},
     {"r / u", "Reject / restore the clip on screen"},
 }
@@ -674,10 +674,16 @@ mp.add_key_binding("s",          "copy_remove_attempt_suffix", copy_remove_attem
 mp.add_key_binding("\\",         "toggle_variant_mode",        toggle_variant_mode)
 mp.add_key_binding("DEL",        "move_to_trash",              move_to_trash)
 mp.add_key_binding("F2",         "rename_file",                rename_current_file)
--- XML assembly: on a shot's first / last frame, Ctrl+S saves its start / end
--- frame (shot_jump.lua), which falls back to the plain snapshot on any other frame
-mp.add_key_binding("ctrl+s",     "save_custom_snapshot",       function()
+-- Ctrl+E: a numbered snapshot; in an XML assembly, on a shot's first / last frame,
+-- its start / end frame (shot_jump.lua), the plain snapshot on any other frame
+mp.add_key_binding("ctrl+e",     "save_custom_snapshot",       function()
     if is_xml_assembly(mp.get_property("path")) then mp.commandv("script-binding", "shot_jump/save_frame"); return end
+    save_custom_snapshot()
+end)
+-- Ctrl+S: in an XML, save it (a review: its choices; shot_jump.lua). Elsewhere
+-- it still takes a snapshot, as it used to
+mp.add_key_binding("ctrl+s",     "save_xml",                   function()
+    if is_xml_assembly(mp.get_property("path")) then mp.commandv("script-binding", "shot_jump/xml_save"); return end
     save_custom_snapshot()
 end)
 mp.add_key_binding(nil,          "save_custom_snapshot_plain", save_custom_snapshot)
