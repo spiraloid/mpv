@@ -1841,8 +1841,11 @@ local function row_events(events, list, vx0, vy0, vw, k)
         local hy0, hy1 = vy0, y1 + 22 * k
         buttons[#buttons + 1] = {name = "apply", x0 = ax0 - 7 * k, y0 = hy0, x1 = (ax1 + xx0) / 2, y1 = hy1, enabled = true}
         buttons[#buttons + 1] = {name = "cancel", x0 = (ax1 + xx0) / 2, y0 = hy0, x1 = vx0 + vw, y1 = hy1, enabled = true}
-    elseif list.selected and #list > 0 then   -- the take on screen is the select: a check before the row
-        tick(x - 50 * k, y + h / 2 - 16 * k, 32 * k, "43C03E")
+    elseif #list > 0 and (list.selected or list.hint) then
+        -- a check before the row: green on the select, gray on any other take; a click is Enter
+        local col = hovered == "select" and "FFFFFF" or (list.selected and "43C03E" or "8C8C8C")
+        tick(x - 50 * k, y + h / 2 - 16 * k, 32 * k, col)
+        buttons[#buttons + 1] = {name = "select", x0 = x - 70 * k, y0 = vy0, x1 = x - 4 * k, y1 = y + h + 22 * k, enabled = true}
     end
     -- each button takes its whole slot, from the top of the picture to a little
     -- under the label, so a click near the word lands; under the mouse a faint
@@ -4353,6 +4356,7 @@ end
 review_click = function(name)   -- a click on the row, or on the green bar's Apply
     if name == "apply" then return notes.mode_apply() end
     if name == "cancel" then return notes.mode_cancel() end
+    if name == "select" then return notes.select_enter() end
     local pin = name:match("^pin_(%a+)$")
     if pin then return notes.pin(pin) end
     return set_mark(name)
