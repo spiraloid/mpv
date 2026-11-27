@@ -268,7 +268,7 @@ A shot can also have a chosen version with no state. `x` clears a shot's choice 
 **Save: `Ctrl+Shift+S`** (`Cmd+S`), or Yes when you quit. mpv then:
 1. Reads `shots/selects.json` again, changes only the shots this session touched, and writes it in place.
 2. Runs the project's scripts (set in `script-opts/shot_jump.conf`), which apply the choices to the folders and rebuild the XML.
-3. Reloads the rebuilt XML. While it works, the SAVING card lists the shots being saved, one line each (`07 · run 12 · re-roll, note · driver, start frame`); when it's done there is nothing to dismiss.
+3. Reloads the rebuilt XML. While it works, the SAVING card lists the shots being saved, one line each (`07 · run 12 · re-roll, note · driver, start frame`); the card shows which script is running and stays over the reload until the rebuilt review shows its frame, so the old frame doesn't flash back, and there is nothing to dismiss. Saving as you quit (Yes) skips the reload and closes as soon as the scripts are done. How long each script took goes to mpv's log (`review save: … took …`).
 
 If a script is missing or fails, a card says so, word for word, with the scripts' last lines, and the choices file stays saved.
 

@@ -4612,20 +4612,38 @@ local function save_review(done)
     clear_overlay()
     hide_osc(true)
     local t0 = mp.get_time()
+    local stage = "updating the folders"   -- what the card says is happening now
     local tick = mp.add_periodic_timer(0.5, function()
-        draw_saving("updating the folders", math.floor(mp.get_time() - t0), "", changed)
+        draw_saving(stage, math.floor(mp.get_time() - t0), "", changed)
     end)
-    draw_saving("updating the folders", 0, "", changed)
+    draw_saving(stage, 0, "", changed)
 
     local function finish()
         tick:kill()
         review_busy = false
-        saving_overlay:remove()
-        hide_osc(false)
+        msg.info(string.format("review save: %.1fs in all", mp.get_time() - t0))
+        -- quitting (Yes at the quit prompt) and it went through: no reload, no
+        -- frame flashing back; the card stays until mpv closes (or renders the video)
+        if done and all_ok then return done(true) end
         r.result = {ok = all_ok, lines = report, done = done}
         -- the XML was rebuilt from the saved choices: it carries them now
         if all_ok and #cmds > 0 then picks[r.xml] = nil end
         session.relist()   -- the project's scripts may have copied files (a final)
+        -- the card stays over the reload and goes once the rebuilt review shows its
+        -- frame, so the old frame doesn't flash back in between
+        stage = "reloading the review"
+        draw_saving(stage, math.floor(mp.get_time() - t0), "", changed)
+        local gone = false
+        local function reveal()
+            if gone then return end
+            gone = true
+            mp.unregister_event(reveal)
+            saving_overlay:remove()
+            hide_osc(false)
+            render(true)
+        end
+        mp.register_event("playback-restart", reveal)
+        mp.add_timeout(10, reveal)   -- whatever happens, the card doesn't stay
         pending_action = {kind = "choose", xml = r.xml, notice = "review saved",
                           pos = mp.get_property_number("time-pos") or 0}
         mp.commandv("loadfile", state.path, "replace")
@@ -4634,6 +4652,9 @@ local function save_review(done)
         local cmd = cmds[i]
         if not cmd then return finish() end
         local label = name_of((cmd:match("^%S+")))
+        stage = "running " .. label
+        draw_saving(stage, math.floor(mp.get_time() - t0), "", changed)
+        local t1 = mp.get_time()
         local args, why = tools.args(r.root, cmd)
         if not args then
             all_ok = false
@@ -4642,6 +4663,7 @@ local function save_review(done)
         end
         tools.run_async(args, function(res)
             local ok, lines = tool_result(res)
+            msg.info(string.format("review save: %s took %.1fs", label, mp.get_time() - t1))
             if not ok then
                 all_ok = false
                 report[#report + 1] = label .. " FAILED: " .. tools.failure(res)
