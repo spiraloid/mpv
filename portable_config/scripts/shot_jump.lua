@@ -347,6 +347,15 @@ export.sound_title = "export sound"
 -- snap[xml] = the XML's text (and whether a .bak existed) when first opened;
 -- journal = moves {from, to} and created files {create}, in order.
 local session = {snap = {}, journal = {}}
+-- The shot folders' listings, shared for a minute: every take switch reloads the
+-- XML, and each pass over the folders (some 2,000 files) costs seconds on a cloud
+-- drive. Anything this mpv moves or saves starts a fresh one.
+function session.listing()
+    local now = mp.get_time()
+    if not session.lists or now - session.lists_t > 60 then session.lists, session.lists_t = {}, now end
+    return session.lists
+end
+function session.relist() session.lists = nil end
 local function journal_move(from, to) session.journal[#session.journal + 1] = {from = from, to = to} end
 local encoding = (mp.get_property("o") or "") ~= ""   -- running as the exporter itself
 local add_burn_in, bind_quit_keys, modal_hover                    -- defined further down
@@ -482,6 +491,7 @@ local function rung_files(dir, cache, all)
         end
     end
     walk(dir, 0)
+    msg.verbose("listed " .. ckey .. ": " .. #out .. " files")
     cache[ckey] = out
     return out
 end
@@ -565,7 +575,7 @@ local function build_assembly(xml_path, seq)
     local segs, shots, blank = {}, {}, {}
     local t, missing, retired = 0, 0, 0
     local review_layout = false
-    local cache = {}
+    local cache = session.listing()
     local last_seg
 
     -- Resolve every clip first; a missing one still keeps its slot, played from
@@ -668,8 +678,10 @@ local function build_assembly(xml_path, seq)
         soundtrack = true
         edl = edl .. ";!new_stream;!track_meta,title=" .. q(SOUNDTRACK_TITLE) .. ";" .. table.concat(asegs, ";")
     end
-    -- playing: the render's sound rides along as a second stream, so A can switch to it
-    local esg = not encoding and export_sound and seg(export_sound, true)
+    -- playing: the render's sound rides along as a second stream, so A can switch to
+    -- it, from a copy on this computer (nil until that copy is made)
+    local copy = not encoding and export_sound and export.sound_file and export.sound_file(export_sound)
+    local esg = copy and seg(setmetatable({path = copy}, {__index = export_sound}), true)
     if esg then
         soundtrack = true
         edl = edl .. ";!new_stream;!track_meta,title=" .. q(export.sound_title) .. ";" .. esg
@@ -970,6 +982,7 @@ end
 local function run_action(action)
     if action.kind == "reject" then do_retire(action)
     elseif action.kind == "restore" then do_restore(action) end
+    if action.kind ~= "choose" then session.relist() end   -- files moved
     -- "choose" (Up / Down, a review reload): nothing happens on disk
 end
 
@@ -1261,6 +1274,7 @@ mp.add_key_binding("A", "audio_source", function()
     local src, exp = select_soundtrack()
     if not (src and exp) then
         osd(exp and "sound: the export's (the XML has no other audio track)"
+                or (export.sound_making and "sound: the XML's audio track (the edit's sound is still being copied)")
                 or "sound: the XML's audio track (no export sound to switch to)", 2)
         return
     end
@@ -2252,7 +2266,7 @@ end
 -- Every file of shot nn in the rungs: {path, letter, pass, retired, mtime, size}
 local function shot_versions(shots, nn, cache)
     local rows, sdir = {}, native_seps(shots)
-    cache = cache or {}
+    cache = cache or session.listing()
     for _, d in ipairs(utils.readdir(sdir, "dirs") or {}) do
         if d:match("^%u_") then
             for _, f in ipairs(rung_files(utils.join_path(sdir, d), cache, true)) do
@@ -3572,7 +3586,7 @@ end
 -- the versions of each shot nobody has seen (originals, as Up / Down lists them)
 function notes.unseen_scan(r)
     r.unseen = {}
-    local cache = {}
+    local cache = session.listing()
     for _, shot in ipairs(state.shots or {}) do
         if shot.rung and shot.num and not r.unseen[shot.num] then
             -- one picture is one version, whichever rungs hold it: a byte copy (a pick,
@@ -3965,7 +3979,7 @@ local function clear_choice()
     if not r or review_busy or export.prompting or not shot or not shot.rung or not shot.num or in_preview(r) then return end
     if notes.stepping(r, shot) then return notes.step_skip() end   -- stepping: x skips the imported note
     r.marks[shot.num], r.notes[shot.num] = nil, nil
-    local top = top_version(shot.rung.shots, shot.rung.nn, {})
+    local top = top_version(shot.rung.shots, shot.rung.nn, session.listing())
     if top and slash(top) ~= slash(shot.play or "") then
         choose_version(asm, shot, top, "choice cleared: " .. rung_label(rung_info(top), shot.num_text))
     else
@@ -4117,6 +4131,7 @@ local function save_review(done)
         r.result = {ok = all_ok, lines = report, done = done}
         -- the XML was rebuilt from the saved choices: it carries them now
         if all_ok and #cmds > 0 then picks[r.xml] = nil end
+        session.relist()   -- the project's scripts may have copied files (a final)
         pending_action = {kind = "choose", xml = r.xml, notice = "review saved",
                           pos = mp.get_property_number("time-pos") or 0}
         mp.commandv("loadfile", state.path, "replace")
@@ -4254,7 +4269,7 @@ review_loaded = function(asm)
     if not r.seen then notes.seen_load(r) end
     if not r.unseen or r.rescan then r.rescan = nil; notes.unseen_scan(r) end
     if not notes.seen_timer then notes.seen_timer = mp.add_periodic_timer(0.25, function() notes.seen_tick() end) end
-    local cache = {}
+    local cache = session.listing()
     for _, shot in ipairs(asm.shots) do
         if shot.rung and shot.play then
             local rows = shot_versions(shot.rung.shots, shot.rung.nn, cache)
@@ -4331,6 +4346,47 @@ choose = function(i)
     else                              -- Cancel: back to the player as it was
         render(true)
     end
+end
+
+-- The edit's sound, played from a copy on this computer: the edit is a big video
+-- on a cloud drive, and reading its sound from there made opening the review take
+-- minutes. The first time (and after the edit changes) the copy is made in the
+-- background, the XML's audio track plays meanwhile, and the review reloads onto
+-- the copy when it's ready. The copies live in mpv's cache folder.
+export.sound_file = function(c)
+    local info = utils.file_info(c.path)
+    if not info or not info.is_file then return nil end
+    local key, h = c.path .. "|" .. tostring(info.size) .. "|" .. tostring(info.mtime), 5381
+    for i = 1, #key do h = (h * 33 + key:byte(i)) % 4294967296 end
+    local dir = mp.command_native({"expand-path", "~~/cache"})
+    local out = utils.join_path(dir, string.format("edit-sound-%08x.wav", h))
+    if exists(out) then return out end
+    if export.sound_making or not mkdir_p(dir) then return nil end
+    local tmp = utils.join_path(dir, string.format("edit-sound-%08x.part", h))
+    os.remove(tmp)
+    export.sound_making = out
+    msg.info("copying the edit's sound to " .. out)
+    mp.command_native_async({name = "subprocess", playback_only = false, capture_stdout = true, capture_stderr = true,
+        args = {mpv_binary(), "--no-config", "--msg-level=all=error", "--vid=no", "--sid=no",
+                "--o=" .. tmp, "--of=wav", "--oac=pcm_s16le", "--", c.path}},
+        function(ok, res)
+            export.sound_making = nil
+            if not (ok and res and res.status == 0 and exists(tmp) and os.rename(tmp, out)) then
+                os.remove(tmp)
+                msg.warn("could not copy the edit's sound: " .. tostring(res and (res.stderr or res.error_string)))
+                return
+            end
+            msg.info("the edit's sound is ready")
+            -- reload onto it, unless something is open on screen
+            local asm = state.assembly
+            if asm and asm.export_sound and export.listen == "export" and not notes.box
+               and not export.prompting and not export.running and not review_busy and not pending_action then
+                pending_action = {kind = "choose", xml = asm.xml, notice = "the edit's sound is ready",
+                                  pos = mp.get_property_number("time-pos") or 0}
+                mp.commandv("loadfile", state.path, "replace")
+            end
+        end)
+    return nil
 end
 
 local quit_keys = {"ESC", "q", "Q", "CLOSE_WIN", "Meta+q", "Meta+w", "Ctrl+w"}
