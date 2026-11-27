@@ -217,10 +217,10 @@ Each press swaps that version into the slot, on the same frame (pressed during p
 | Key | Pins |
 |-----|------|
 | `d` | The take on screen as the select's **driver**, then a box for what to do with it ("blur the background, keep the mouth sharp"). A driver from a shot of another length gets a warning: the run needs the frame counts equal |
-| `Shift+D` | The pinned driver as **depth** (a depth video made from the take) instead of the footage itself; again: footage |
+| `Shift+D` | The pinned driver as **depth** (a depth video made from the take) instead of the footage itself; again: footage. Also `Tab` while the driver's box is open (it takes every other key), or click **depth** on the bar |
 | `s` / `e` | The frame on screen as the select's **start** / **end** frame |
 
-The same key on the same take (or frame) again unpins it. A pinned take says so in the small line over its label (`driver for 07`). `ENTER` or **Apply** keeps the select and its inputs, saved like any choice; `Esc` puts the shot back as it was before `ENTER`. Inside the mode the state keys, `n`, `x` and Save wait for Apply.
+The same key on the same take (or frame) again unpins it. A pinned take says so in the small line over its label (`driver for 07`). On the select, the row shows its inputs small under re-circulate: the driver take and its kind (`depth driver  07 candidate 01`), then the start / end frames. `ENTER` or **Apply** keeps the select and its inputs, saved like any choice; `Esc` puts the shot back as it was before `ENTER`. Inside the mode the state keys, `n`, `x` and Save wait for Apply.
 
 **Shot state.** Pause on a shot and a row of text buttons appears across the top of the picture: three states, a divider, then the comp switch. One state per shot, on its select: click one (or press its key) to set it, click the set one again to clear it. A set state is drawn in its colour with a bar under it; the others are gray.
 

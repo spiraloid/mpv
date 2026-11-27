@@ -1811,9 +1811,25 @@ local function row_events(events, list, vx0, vy0, vw, k)
         events[#events + 1] = string.format(
             "{\\an7\\pos(0,0)\\p1\\bord%.2f\\shad0\\1a&HFF&\\3c&HFFFFFF&\\3a&H00&}m %.1f %.1f l %.1f %.1f m %.1f %.1f l %.1f %.1f{\\p0}",
             2.2 * k, xc - r, cy - r, xc + r, cy + r, xc + r, cy - r, xc - r, cy + r)
+        local hx = ax0 - 16 * k   -- where the hint ends: the depth switch goes before it
+        if list.mode.driver then   -- a pinned driver: [x] depth, a click (or Shift+D) flips it
+            local dw = 150 * k
+            local dx0 = ax0 - 14 * k - dw
+            local on, ss = list.mode.driver == "depth", 24 * k
+            local sx, sy = dx0 + 14 * k, cy - ss / 2
+            events[#events + 1] = string.format(
+                "{\\an7\\pos(0,0)\\p1\\bord%.2f\\shad0\\1c&HFFFFFF&\\1a&H%s&\\3c&HFFFFFF&\\3a&H00&}m %.1f %.1f l %.1f %.1f %.1f %.1f %.1f %.1f{\\p0}",
+                1.5 * k, on and "00" or "FF", sx, sy, sx + ss, sy, sx + ss, sy + ss, sx, sy + ss)
+            if on then tick(sx, sy, ss, "2A7A1E") end
+            events[#events + 1] = string.format(
+                "{\\an4\\pos(%.1f,%.1f)\\bord0\\shad0\\b1\\q2\\1c&H%s&\\1a&H00&\\fs%.1f}depth",
+                sx + ss + 10 * k, cy, hovered == "depth" and "FFFFFF" or "D8F0D8", 26 * k)
+            buttons[#buttons + 1] = {name = "depth", x0 = dx0, y0 = vy0, x1 = ax0 - 7 * k, y1 = y1 + 22 * k, enabled = true}
+            hx = dx0 - 8 * k
+        end
         events[#events + 1] = string.format(
             "{\\an6\\pos(%.1f,%.1f)\\bord0\\shad0\\q2\\1c&HD8F0D8&\\1a&H00&\\fs%.1f}Enter applies  ·  Esc cancels",
-            ax0 - 16 * k, cy, 20 * k)
+            hx, cy, 20 * k)
         local hy0, hy1 = vy0, y1 + 22 * k
         buttons[#buttons + 1] = {name = "apply", x0 = ax0 - 7 * k, y0 = hy0, x1 = (ax1 + xx0) / 2, y1 = hy1, enabled = true}
         buttons[#buttons + 1] = {name = "cancel", x0 = (ax1 + xx0) / 2, y0 = hy0, x1 = vx0 + vw, y1 = hy1, enabled = true}
@@ -1903,13 +1919,20 @@ local function row_events(events, list, vx0, vy0, vw, k)
                     cx + bw / 2 + 8 * k, cy + 2 * k, 1.5 * k, 21 * k, ass_text(list.by))
             end
         end
+        if b.name == "recirculate" and list.inputs then   -- what the select's next run will use
+            for i, line in ipairs(list.inputs) do
+                events[#events + 1] = string.format(
+                    "{\\an8\\pos(%.1f,%.1f)\\bord%.2f\\shad0\\q2\\3c&H000000&\\3a&H40&\\1c&H%s&\\1a&H00&\\fs%.1f}%s",
+                    cx, cy + (32 + (i - 1) * 22) * k, 1.5 * k, i == 1 and "D8F0D8" or "D0D0D0", 20 * k, ass_text(line))
+            end
+        end
         buttons[#buttons + 1] = {name = b.name, x0 = x, y0 = hy0, x1 = x + w, y1 = hy1, enabled = not b.off}
         x = x + w
     end
     if list.step and not list.box then   -- an imported note, being stepped through
         local st = list.step
         local bw, fs = 1100 * k, 26 * k
-        local x0, y0 = vx0 + (vw - bw) / 2, y + h + ROW.note_gap * k
+        local x0, y0 = vx0 + (vw - bw) / 2, y + h + (ROW.note_gap + (list.inputs and #list.inputs * 16 or 0)) * k
         -- long notes wrap inside the panel (at most four lines each)
         local function wrapped(s, width)
             local out, line = {}, ""
@@ -1949,7 +1972,7 @@ local function row_events(events, list, vx0, vy0, vw, k)
         local bx = list.box
         local bw, fs = 1000 * k, 28 * k
         local lh, pad = fs * 1.3, 7 * k
-        local x0, y0 = vx0 + (vw - bw) / 2, y + h + ROW.note_gap * k
+        local x0, y0 = vx0 + (vw - bw) / 2, y + h + (ROW.note_gap + (list.inputs and #list.inputs * 16 or 0)) * k
         local label = bx.title or ("Notes for " .. bx.num)
         local sx = x0 + 16 * k + B.text_w(label .. "  ", fs)        -- where the text starts, on every line
         local lines = B.wrap(bx.chars, x0 + bw - 16 * k - sx, fs)
@@ -2022,7 +2045,8 @@ local function row_events(events, list, vx0, vy0, vw, k)
             if i == 4 and #lines > 4 then s = s .. " …" end
             events[#events + 1] = string.format(
                 "{\\an8\\pos(%.1f,%.1f)\\bord%.2f\\shad0\\q2\\3c&H000000&\\3a&H50&\\1c&HFFFFFF&\\1a&H00&\\fs%.2f}%s",
-                vx0 + vw / 2, y + h + (ROW.note_gap + 9) * k + (i - 1) * fs * 1.3, 2 * k, fs, esc(s))
+                vx0 + vw / 2, y + h + (ROW.note_gap + 9 + (list.inputs and #list.inputs * 16 or 0)) * k + (i - 1) * fs * 1.3,
+                2 * k, fs, esc(s))
         end
     end
 end
@@ -3749,7 +3773,8 @@ function notes.edit(shot, prefill, on_keep, title)
     end, {complex = true})
     notes.keys[#notes.keys + 1] = "shot_note_MBTN_LEFT"
     key("MBTN_LEFT_DBL", function() end)   -- not fullscreen
-    for _, k in ipairs({"WHEEL_UP", "WHEEL_DOWN", "TAB"}) do key(k, function() end) end
+    for _, k in ipairs({"WHEEL_UP", "WHEEL_DOWN"}) do key(k, function() end) end
+    key("TAB", function() if b.on_tab then b.on_tab(b) end end)   -- the driver box: footage / depth
     key("ENTER", function() notes.close(true) end)
     key("KP_ENTER", function() notes.close(true) end)
     key("ESC", function() notes.close(false) end)
@@ -4151,7 +4176,8 @@ review_buttons = function(shot)
         for _, k in ipairs({"start", "end"}) do
             if ins[k] then parts[#parts + 1] = k .. " " .. lab(ins[k]) .. " f" .. tostring(ins[k].frame or "?") end
         end
-        local list = {row = true, mode = {label = m.label, parts = parts}}
+        local list = {row = true, mode = {label = m.label, parts = parts,
+                                          driver = ins.driver and (ins.driver.kind == "depth" and "depth" or "footage") or nil}}
         local b = notes.box
         if b then list.box = {num = b.num, chars = b.chars, pos = b.pos, anchor = b.anchor, title = b.title} end
         return list
@@ -4187,6 +4213,23 @@ review_buttons = function(shot)
         list.hint = "Enter makes this take the select" .. (ri and ("   ·   the select is " .. rung_label(ri, shot.num_text)) or "")
     else
         list.selected = true
+        -- the select's pinned inputs, small under re-circulate: the driver take and its kind, the frames
+        local ins = notes.inputs_of(r, shot.num)
+        if ins then
+            local function lab(v)
+                local ri = rung_info(abs_file(r, v.file))
+                return ri and rung_label(ri) or name_of(v.file)
+            end
+            list.inputs = {}
+            if ins.driver then
+                list.inputs[#list.inputs + 1] = (ins.driver.kind == "depth" and "depth driver  " or "footage driver  ") .. lab(ins.driver)
+            end
+            local fr = {}
+            for _, k in ipairs({"start", "end"}) do
+                if ins[k] then fr[#fr + 1] = k .. "  " .. lab(ins[k]) .. " f" .. tostring(ins[k].frame or "?") end
+            end
+            if #fr > 0 then list.inputs[#list.inputs + 1] = table.concat(fr, "   ·   ") end
+        end
     end
     for _, m in ipairs(MARKS) do
         list[#list + 1] = {name = m.name, text = m.label, color = m.color, star = m.star, lit = cur == m.name, off = away}
@@ -4263,6 +4306,7 @@ end
 review_click = function(name)   -- a click on the row, or on the green bar's Apply
     if name == "apply" then return notes.mode_apply() end
     if name == "cancel" then return notes.mode_cancel() end
+    if name == "depth" then return notes.driver_kind() end
     return set_mark(name)
 end
 
@@ -4431,7 +4475,16 @@ function notes.pin(kind)
                 t.driver = {file = file, note = text, kind = now.driver.kind}
                 set(t)
             end
-        end, "Driver for " .. m.num)
+        end, "Driver for " .. m.num .. ", footage  (Tab: depth)")
+        -- the box takes every key, Shift+D included: Tab flips the kind from inside it
+        if notes.box then
+            notes.box.on_tab = function(bx)
+                notes.driver_kind()
+                local now = notes.inputs_of(r, m.num)
+                local depth = now and now.driver and now.driver.kind == "depth"
+                bx.title = "Driver for " .. m.num .. (depth and ", depth  (Tab: footage)" or ", footage  (Tab: depth)")
+            end
+        end
         return
     end
     local clip = asm.seq.video[shot.idx]
