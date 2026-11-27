@@ -606,7 +606,7 @@ local HELP = {
     {"n   ·   x", "Edit the select's note (re-roll, re-circulate open it)   ·   clear the shot's choice"},
     {"in the note box", "Click, drag, double click: cursor, select, word  ·  Shift / Ctrl + arrows"},
     {"i  /  Tab", "Import notes from a recorded review  /  step through them (Enter accepts)"},
-    {"Ctrl + Shift + s", "Save: the choices file, then the project's scripts"},
+    {"Ctrl + Shift + s  ·  Ctrl + r", "Save: the choices file, then the project's scripts   ·   rebuild the cut"},
     {"Ctrl + s", "On a shot's first / last frame: NN_start.png / NN_end.png"},
     {"PLAIN XML   no rung folders"},
     {"r / u", "Reject / restore the clip on screen"},

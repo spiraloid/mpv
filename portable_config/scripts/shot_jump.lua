@@ -38,6 +38,7 @@ local o = {
     review_reviewers = "",   -- under the XML's folder: {"logins": {login: name}}
     export_audio_clip = "",  -- id of an audio clip whose file is the rendered video's sound
     review_notes_dir = "",   -- under the XML's folder: notes files from recorded reviews (i imports)
+    review_refresh = 120,    -- seconds: while paused in a review, list the folders again and recount the bell (0: off)
     review_defaults = "",    -- under the XML's folder: {"recirculate_note": ...}, shown as a hint (never written)
     real_pointer = true,     -- Mac: a click asks macOS where the pointer is (no: trust mpv; for tests)
     -- Look only, for people who watch: a review always opens as a preview (no
@@ -353,7 +354,10 @@ local session = {snap = {}, journal = {}}
 -- drive. Anything this mpv moves or saves starts a fresh one.
 function session.listing()
     local now = mp.get_time()
-    if not session.lists or now - session.lists_t > 60 then session.lists, session.lists_t = {}, now end
+    if not session.lists or now - session.lists_t > 60 then
+        session.lists, session.lists_t = {}, now
+        session.lists_gen = (session.lists_gen or 0) + 1   -- a fresh listing: the bell is counted again
+    end
     return session.lists
 end
 function session.relist() session.lists = nil end
@@ -2766,15 +2770,15 @@ end
 local saving_overlay = mp.create_osd_overlay("ass-events")
 saving_overlay.z = 1000
 
-local function draw_saving(name, secs, hint, list)
+local function draw_saving(name, secs, hint, list, title)
     local d = mp.get_property_native("osd-dimensions") or {w = 1920, h = 1080}
     local w, h = d.w or 1920, d.h or 1080
     local k = h / 1080
     saving_overlay.res_x, saving_overlay.res_y = w, h
     saving_overlay.data = table.concat({
         string.format("{\\an7\\pos(0,0)\\p1\\bord0\\shad0\\1c&H000000&\\1a&H30&}m 0 0 l %d 0 %d %d 0 %d{\\p0}", w, w, h, h),
-        string.format("{\\an5\\pos(%.1f,%.1f)\\bord0\\shad0\\b1\\q2\\1c&HFFFFFF&\\1a&H00&\\fs%.1f\\fsp%.1f}SAVING…",
-            w / 2, h / 2 - 20 * k, 150 * k, 6 * k),
+        string.format("{\\an5\\pos(%.1f,%.1f)\\bord0\\shad0\\b1\\q2\\1c&HFFFFFF&\\1a&H00&\\fs%.1f\\fsp%.1f}%s",
+            w / 2, h / 2 - 20 * k, 150 * k, 6 * k, title or "SAVING…"),
         string.format("{\\an5\\pos(%.1f,%.1f)\\bord0\\shad0\\q2\\1c&HC0C0C0&\\1a&H00&\\fs%.1f}%s  ·  %ds%s",
             w / 2, h / 2 + 90 * k, 30 * k, ass_text(name), secs,
             hint or "  ·  press again to quit without the video"),
@@ -4348,6 +4352,63 @@ function notes.take_over(r)
     return true
 end
 
+-- Ctrl+R: read the folders again and rebuild the cut from them and the saved
+-- choices (the project's build script), so new takes and new shots show without
+-- quitting. A preview only reads the folders again: it never rebuilds.
+function notes.refresh()
+    local r = current_review()
+    if not r or review_busy or export.prompting or notes.mode or notes.box then return end
+    local t0 = mp.get_time()
+    local function reload(note)
+        session.relist()
+        r.rescan = true
+        local gone = false
+        local function reveal()
+            if gone then return end
+            gone = true
+            mp.unregister_event(reveal)
+            saving_overlay:remove()
+            hide_osc(false)
+            render(true)
+        end
+        mp.register_event("playback-restart", reveal)
+        mp.add_timeout(10, reveal)
+        pending_action = {kind = "choose", xml = r.xml, notice = note, pos = mp.get_property_number("time-pos") or 0}
+        mp.commandv("loadfile", state.path, "replace")
+    end
+    mp.set_property_bool("pause", true)
+    clear_overlay()
+    hide_osc(true)
+    draw_saving("reading the folders", 0, "", nil, "UPDATING…")
+    if r.preview or o.review_open_cmd == "" then return reload("folders read again") end
+    local args, why = tools.args(r.root, o.review_open_cmd)
+    if not args then return reload("folders read again; the review wasn't rebuilt: " .. why) end
+    review_busy = true
+    local tick = mp.add_periodic_timer(0.5, function()
+        draw_saving("rebuilding the review", math.floor(mp.get_time() - t0), "", nil, "UPDATING…")
+    end)
+    draw_saving("rebuilding the review", 0, "", nil, "UPDATING…")
+    tools.run_async(args, function(res)
+        tick:kill()
+        review_busy = false
+        local ok, lines = tool_result(res)
+        msg.info(string.format("review refresh: %.1fs", mp.get_time() - t0))
+        reload(ok and "review rebuilt from the folders" or ("not rebuilt: " .. (lines[#lines] or tools.failure(res))))
+    end)
+end
+
+-- While paused in a review, now and then (review_refresh): list the folders
+-- again and recount the bell, so takes made since show as new without a save
+mp.add_periodic_timer(math.max(o.review_refresh, 30), function()
+    if o.review_refresh <= 0 or not mp.get_property_bool("pause") then return end
+    local r = current_review()
+    if not r or review_busy or export.prompting or export.running or notes.mode or notes.box or pending_action then return end
+    session.relist()
+    notes.unseen_scan(r)
+    r.unseen_gen = session.lists_gen
+    render(true)
+end)
+
 -- select mode -------------------------------------------------------------------
 -- Up / Down only look at takes. Enter makes the take on screen the shot's select
 -- (a check on the row) and opens select mode for it: a green bar across the top
@@ -4792,6 +4853,7 @@ local function bind_review_keys(on)
                   {"TAB", "step_next", function() notes.step(1) end},
                   {"Shift+TAB", "step_prev", function() notes.step(-1) end},
                   {"ENTER", "select", function() notes.select_enter() end},
+                  {"Ctrl+r", "refresh", function() notes.refresh() end},
                   {"KP_ENTER", "select_kp", function() notes.select_enter() end}}
     for _, m in ipairs(MARKS) do
         list[#list + 1] = {m.key, m.name, function() set_mark(m.name) end}
@@ -4857,7 +4919,12 @@ review_loaded = function(asm)
     if not r.base then r.base = read_selects(r); r.base_imported = notes.read_imported(r) end
     -- seen versions: read once, and the shots' unseen ones on the first load and after a save
     if not r.seen then notes.seen_load(r) end
-    if not r.unseen or r.rescan then r.rescan = nil; notes.unseen_scan(r) end
+    -- and whenever the folders have been listed afresh since: new takes light it within a minute
+    if not r.unseen or r.rescan or r.unseen_gen ~= session.lists_gen then
+        r.rescan = nil
+        notes.unseen_scan(r)
+        r.unseen_gen = session.lists_gen
+    end
     if not notes.seen_timer then notes.seen_timer = mp.add_periodic_timer(0.25, function() notes.seen_tick() end) end
     local cache = session.listing()
     for _, shot in ipairs(asm.shots) do
