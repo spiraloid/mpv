@@ -3408,7 +3408,7 @@ do
             if r.preview and not r.preview.view_only and not r.preview_freed and not lock.other(xml) then
                 r.preview_freed = true
                 osd(tostring(r.preview.user or "The other editor") .. " closed " .. name_of(xml) ..
-                    ".  Quit and open it again to make changes.", 8)
+                    ".  Esc makes you the editor.", 8)
             end
         end
         if not held then return end
@@ -4330,6 +4330,24 @@ local function clear_choice()
     render(true)
 end
 
+-- A preview whose editor has quit becomes the editor in place: the lock, what
+-- they saved, and a quiet reload of the XML their save rebuilt (same frame)
+function notes.take_over(r)
+    if not lock.take(r.xml) then return false end
+    local was = r.preview
+    r.preview, r.preview_freed = nil, nil
+    r.base, r.base_imported = read_selects(r), notes.read_imported(r)
+    r.marks, r.touched, r.cleared, r.notes, r.by, r.inputs = {}, {}, {}, {}, {}, {}
+    r.seen, r.rescan = nil, true
+    picks[r.xml] = nil
+    session.relist()
+    pending_action = {kind = "choose", xml = r.xml,
+                      notice = tostring(was and was.user or "The other editor") .. " closed it: you're the editor now",
+                      pos = mp.get_property_number("time-pos") or 0}
+    mp.commandv("loadfile", state.path, "replace")
+    return true
+end
+
 -- select mode -------------------------------------------------------------------
 -- Up / Down only look at takes. Enter makes the take on screen the shot's select
 -- (a check on the row) and opens select mode for it: a green bar across the top
@@ -4897,7 +4915,11 @@ local function quit_request()
     local r = current_review()
     if r and not encoding then            -- a review: only its unsaved choices matter
         if review_busy then return end
-        if r.preview then mp.command("quit"); return end   -- nothing could be saved anyway
+        if r.preview then
+            -- the editor has gone: Esc takes the review over, right here, instead of quitting
+            if not r.preview.view_only and not lock.other(r.xml) and notes.take_over(r) then return end
+            mp.command("quit"); return   -- nothing could be saved anyway
+        end
         if #review_changes(r) > 0 then open_review_prompt(r) else mp.command("quit") end
         return
     end
