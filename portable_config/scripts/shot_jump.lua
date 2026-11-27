@@ -1818,7 +1818,7 @@ local function row_events(events, list, vx0, vy0, vw, k)
         for n, c in ipairs(checks) do
             local sx0 = boxes_x + (n - 1) * sw
             local ss = 24 * k
-            local bx, by = sx0 + 6 * k, cy - ss / 2 - (c.sub and 9 * k or 0)
+            local bx, by = sx0 + 6 * k, cy - ss / 2 - 9 * k   -- the line under it is kept, empty or not: nothing moves
             local hot = hovered == c.name
             events[#events + 1] = string.format(
                 "{\\an7\\pos(0,0)\\p1\\bord%.2f\\shad0\\1c&HFFFFFF&\\1a&H%s&\\3c&HFFFFFF&\\3a&H00&}m %.1f %.1f l %.1f %.1f %.1f %.1f %.1f %.1f{\\p0}",
@@ -2319,7 +2319,9 @@ local function hide_osc(on)
     mp.commandv("script-message", "osc-visibility", on and "never" or "auto", "no_osd")
     if on and click_bound then          -- re-push our click above the controller's
         click_bound = false
-        mp.add_timeout(0.05, function() if hovered and not export.prompting then set_click_binding(true) end end)
+        -- whenever buttons show, not only when mpv thinks the pointer is on one: on the
+        -- Mac its idea of the pointer can be stale, and the controller then took the first click
+        mp.add_timeout(0.05, function() if #buttons > 0 and not export.prompting then set_click_binding(true) end end)
     end
 end
 
