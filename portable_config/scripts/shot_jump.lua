@@ -1273,20 +1273,21 @@ local function select_soundtrack()
     return src, exp, pick
 end
 
--- A: hear the render's sound (as the .mp4 has it) or the XML's first audio track
+-- Shift+A: "source audio" (the edit's own sound, export_audio_clip, as the .mp4 has
+-- it) or "assembly audio" (the XML's first audio track)
 mp.add_key_binding("A", "audio_source", function()
     if not state.assembly then osd("A switches the sound of an XML assembly", 1.5); return end
     local src, exp = select_soundtrack()
     if not (src and exp) then
-        osd(exp and "sound: the export's (the XML has no other audio track)"
-                or (export.sound_making and "sound: the XML's audio track (the edit's sound is still being copied)")
-                or "sound: the XML's audio track (no export sound to switch to)", 2)
+        osd(exp and "sound: source audio (the XML has no assembly audio)"
+                or (export.sound_making and "sound: assembly audio (the source audio is still being copied)")
+                or "sound: assembly audio (no source audio to switch to)", 2)
         return
     end
     export.listen = export.listen == "export" and "source" or "export"
     local _, _, pick = select_soundtrack()
-    osd("sound: " .. (export.listen == "export" and "as the .mp4 (" or "source (") ..
-        tostring(pick.title == export.sound_title and (state.assembly.export_name or "export audio")
+    osd("sound: " .. (export.listen == "export" and "source audio (" or "assembly audio (") ..
+        tostring(pick.title == export.sound_title and (state.assembly.export_name or "the edit")
                  or (state.assembly.source_name or "audio track 1")) .. ")", 2)
 end)
 
@@ -2157,6 +2158,7 @@ mp.observe_property("time-pos", "number", function()
     if i and here and here.xml == asm.xml and here.idx ~= i and not pending_action then
         slack.here = {xml = asm.xml, idx = i}
         if slack.snap_back(here.idx) then
+            if slack.swap_in_place(asm) then return end
             pending_action = {kind = "choose", xml = asm.xml, pos = mp.get_property_number("time-pos")}
             mp.commandv("loadfile", state.path, "replace")
             return
@@ -2506,6 +2508,41 @@ end
 -- Put a version in the shot's slot: remembered in picks and applied when the
 -- assembly is rebuilt on the reload. Nothing is written, and in a review it is
 -- only looked at: Enter makes a take the shot's select.
+-- Swap the picks in without reloading the XML, so the sound plays on without a
+-- break: the cut is built again with the picks and its picture added as a video
+-- track that replaces the one showing (same timeline, so it stays in sync); the
+-- audio never stops. False when that can't be done (the caller reloads instead).
+function slack.swap_in_place(asm)
+    if not asm or asm ~= state.assembly or encoding then return false end
+    local text = read_file(asm.xml)
+    local seq = text and parse_xmeml(text, dir_of(asm.xml))
+    local nasm = seq and build_assembly(asm.xml, seq)
+    if not nasm then return false end
+    local vedl = nasm.edl:match("^(edl://.-);!new_stream") or nasm.edl
+    local before = {}
+    for _, t in ipairs(mp.get_property_native("track-list") or {}) do
+        if t.type == "video" then before[t.id] = true end
+    end
+    mp.commandv("video-add", vedl, "select", "take")
+    local tid
+    for _, t in ipairs(mp.get_property_native("track-list") or {}) do
+        if t.type == "video" and not before[t.id] then tid = t.id end
+    end
+    if not tid then return false end
+    if slack.swap_tid and slack.swap_tid ~= tid then mp.commandv("video-remove", tostring(slack.swap_tid)) end
+    slack.swap_tid = tid
+    nasm.url, nasm.generated = asm.url, asm.generated
+    state.assembly, state.shots, state.fps = nasm, nasm.shots, nasm.fps
+    if review_loaded then review_loaded(nasm) end
+    browse = nil
+    local lp = slack.loop
+    if lp and lp.xml == nasm.xml and nasm.shots[lp.idx] then slack.set_loop(nasm.shots[lp.idx]) end
+    render(true)
+    return true
+end
+-- a real reload starts clean: no added picture track to replace
+mp.register_event("start-file", function() slack.swap_tid = nil end)
+
 local function choose_version(asm, shot, path, note, pos)
     picks[asm.xml] = picks[asm.xml] or {}
     picks[asm.xml][shot.num] = path
@@ -2515,9 +2552,10 @@ local function choose_version(asm, shot, path, note, pos)
     elseif not r and o.review_xml ~= "" then
         note = note .. "   (not saved: open " .. o.review_xml .. " to choose)"
     end
+    osd(note, 1.5)
+    if not pos and slack.swap_in_place(asm) then return end   -- the sound plays on
     pending_action = {kind = "choose", xml = asm.xml, notice = note,
                       pos = pos or mp.get_property_number("time-pos") or shot.t}
-    osd(note, 1.5)
     mp.commandv("loadfile", state.path, "replace")
 end
 
@@ -4486,7 +4524,7 @@ function notes.mode_keys(on)
                   {"ENTER", "apply", function() notes.mode_apply() end},
                   {"KP_ENTER", "apply_kp", function() notes.mode_apply() end},
                   {"ESC", "cancel", function() notes.mode_cancel() end}}
-    for _, k in ipairs({"r", "c", "a", "m", "n", "x", "i", "TAB", "Shift+TAB", "Ctrl+s", "Ctrl+S", "Ctrl+Shift+s", "Meta+s"}) do
+    for _, k in ipairs({"r", "c", "a", "f", "m", "n", "x", "i", "TAB", "Shift+TAB", "Ctrl+s", "Ctrl+S", "Ctrl+Shift+s", "Meta+s"}) do
         list[#list + 1] = {k, "off_" .. k, function() osd("select mode: Enter applies, Esc cancels", 1.5) end}
     end
     for _, b in ipairs(list) do
@@ -4948,6 +4986,7 @@ local function bind_review_keys(on)
         list[#list + 1] = {m.key, m.name, function() set_mark(m.name) end}
     end
     list[#list + 1] = {MARKS.comp.key, "comp", function() set_mark("comp") end}
+    list[#list + 1] = {"f", "final_f", function() set_mark("final") end}   -- f, as well as a: final
     for _, key in ipairs({"Ctrl+s", "Ctrl+S", "Ctrl+Shift+s", "Meta+s"}) do
         list[#list + 1] = {key, "save_" .. key, function() save_review() end}
     end
