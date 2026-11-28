@@ -2549,15 +2549,10 @@ local function version_step(dir)
     -- stepping onto a version is seeing it, even when the keys go faster than it
     -- can be drawn (held down, or pressed quickly)
     if B.mark_seen then B.mark_seen(shot, f.path) end
-    -- playing: stop on the swapped shot's first frame, so the swap is seen and the
-    -- next press lands on the same shot
-    local pos
-    if not mp.get_property_bool("pause") then
-        mp.set_property_bool("pause", true)
-        pos = shot.t + 0.0005   -- just inside the shot, as a jump lands
-    end
+    -- playing: the new take plays on from the frame it was switched on (the shot
+    -- loops, so the next press still lands on it); paused: the same frame
     choose_version(asm, shot, f.path,
-                   string.format("%s  ·  %d / %d", rung_label(rung_info(f.path), shot.num_text), k, #list), pos)
+                   string.format("%s  ·  %d / %d", rung_label(rung_info(f.path), shot.num_text), k, #list))
 end
 
 -- Shift+Up: the shot's select (in a review; elsewhere the take the XML names).
@@ -2590,13 +2585,8 @@ function slack.jump(to)
     browse = {idx = shot.idx, path = f.path}
     slack.loop = {xml = asm.xml, idx = shot.idx}
     if B.mark_seen then B.mark_seen(shot, f.path) end
-    local pos
-    if not mp.get_property_bool("pause") then
-        mp.set_property_bool("pause", true)
-        pos = shot.t + 0.0005
-    end
     choose_version(asm, shot, f.path, string.format("%s  ·  %d / %d  ·  %s", rung_label(rung_info(f.path), shot.num_text),
-                   k, #list, what), pos)
+                   k, #list, what))   -- playing on from this frame, as Up / Down
 end
 
 -- ── Ctrl+E on a shot's first or last frame: NN_start.png / NN_end.png ─────────
